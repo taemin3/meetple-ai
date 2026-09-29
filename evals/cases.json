@@ -1,0 +1,22 @@
+[
+  {"id":"weekend_beginner","query":"이번 주말 초보자도 가능한 러닝 모임","status":"COMPLETED","ids":[10],"filters":{"startsAt":"2026-10-03T00:00:00","endsBefore":"2026-10-05T00:00:00"}},
+  {"id":"weekend_running","query":"이번 주말 러닝 모임","status":"COMPLETED","ids":[10,11]},
+  {"id":"today","query":"오늘 러닝 모임","status":"COMPLETED","ids":[12],"filters":{"startsAt":"2026-09-30T12:00:00","endsBefore":"2026-10-01T00:00:00"}},
+  {"id":"tomorrow","query":"내일 러닝 모임","status":"COMPLETED","ids":[13],"filters":{"startsAt":"2026-10-01T00:00:00","endsBefore":"2026-10-02T00:00:00"}},
+  {"id":"next_weekend","query":"다음 주말 러닝 모임","status":"COMPLETED","ids":[14]},
+  {"id":"explicit_date","query":"2026년 10월 3일 러닝 모임","status":"COMPLETED","ids":[10],"filters":{"startsAt":"2026-10-03T00:00:00","endsBefore":"2026-10-04T00:00:00"}},
+  {"id":"radius","query":"이번 주말 500미터 안의 러닝 모임","status":"COMPLETED","ids":[10],"filters":{"radiusMeters":500}},
+  {"id":"radius_expansion","query":"반경 10km까지 넓혀서 러닝 모임 찾아줘","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"books","query":"이번 주말 독서 모임","status":"COMPLETED","ids":[20]},
+  {"id":"study","query":"이번 주말 자바 스터디","status":"COMPLETED","ids":[21]},
+  {"id":"no_match","query":"이번 주말 수영 모임","status":"NO_RESULTS","ids":[]},
+  {"id":"unsupported_region","query":"부산 해운대의 러닝 모임","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"unsupported_time","query":"이번 주말 오후 3시에 시작하는 러닝 모임","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"schedule_conflict","query":"내가 참여한 모임과 시간이 겹치지 않는 러닝 모임","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"create_request","query":"이번 주말 러닝 모임을 만들어줘","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"join_request","query":"러닝 모임에 바로 참여 신청해줘","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"missing_location","query":"근처 러닝 모임","location":false,"status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"past","query":"2020년 1월 1일 러닝 모임","status":"NEEDS_CLARIFICATION","ids":[]},
+  {"id":"no_preference_evidence","query":"이번 주말 참가비가 무료인 러닝 모임","status":"NO_RESULTS","ids":[]},
+  {"id":"sunday_boundary","query":"이번 주말 러닝 모임","referenceTime":"2026-10-04T12:00:00","status":"COMPLETED","ids":[11],"filters":{"startsAt":"2026-10-04T12:00:00","endsBefore":"2026-10-05T00:00:00"}}
+]

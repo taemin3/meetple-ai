@@ -1,0 +1,9 @@
+[
+  {"id":10,"title":"초보 러닝","description":"처음 달리는 분 환영. 천천히 3km를 달립니다.","categoryName":"운동","scheduledAt":"2026-10-03T15:00:00","distanceMeters":300},
+  {"id":11,"title":"고급 러닝","description":"경험자를 위한 15km 훈련. 초보자는 참여할 수 없습니다.","categoryName":"운동","scheduledAt":"2026-10-04T15:00:00","distanceMeters":1500},
+  {"id":12,"title":"오늘 러닝","description":"함께 달리는 러닝 모임입니다.","categoryName":"운동","scheduledAt":"2026-09-30T18:00:00","distanceMeters":500},
+  {"id":13,"title":"내일 러닝","description":"가볍게 5km 러닝을 합니다.","categoryName":"운동","scheduledAt":"2026-10-01T18:00:00","distanceMeters":500},
+  {"id":14,"title":"다음 주 러닝","description":"공원에서 함께 달립니다.","categoryName":"운동","scheduledAt":"2026-10-10T15:00:00","distanceMeters":500},
+  {"id":20,"title":"주말 독서","description":"책을 읽고 소감을 나누는 독서 모임입니다.","categoryName":"취미","scheduledAt":"2026-10-03T15:00:00","distanceMeters":700},
+  {"id":21,"title":"자바 스터디","description":"자바 기초부터 함께 공부합니다.","categoryName":"스터디","scheduledAt":"2026-10-04T15:00:00","distanceMeters":800}
+]

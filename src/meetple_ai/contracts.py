@@ -1,0 +1,79 @@
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class Contract(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
+
+
+class SearchRequest(Contract):
+    query: str = Field(min_length=1, max_length=1000)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+    radiusMeters: int = Field(ge=100, le=50000)
+    referenceTime: datetime
+
+    @model_validator(mode="after")
+    def validate_location_and_time(self):
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("위도와 경도는 함께 전달해야 합니다.")
+        if self.referenceTime.tzinfo is not None:
+            raise ValueError("referenceTime은 Spring이 설정한 한국 현지 시각이어야 합니다.")
+        return self
+
+
+class Intent(Contract):
+    keyword: str = Field(max_length=100)
+    category: str | None
+    dateMode: Literal["any", "today", "tomorrow", "this_weekend", "next_weekend", "range"]
+    startDate: str | None
+    endDate: str | None
+    radiusMeters: int | None
+    clarification: str | None
+
+
+class Filters(Contract):
+    keyword: str = Field(max_length=100)
+    category: str | None
+    startsAt: datetime
+    endsBefore: datetime
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radiusMeters: int = Field(ge=100, le=50000)
+
+
+class Candidate(Contract):
+    id: int = Field(gt=0)
+    title: str
+    description: str
+    categoryName: str
+    locationName: str
+    scheduledAt: datetime
+    endsAt: datetime | None
+    capacity: int
+    currentPeople: int
+    distanceMeters: float = Field(ge=0)
+
+
+class Candidates(Contract):
+    items: list[Candidate] = Field(max_length=20)
+    hasMore: bool
+
+
+class Recommendation(Contract):
+    meetingId: int = Field(gt=0)
+    evidenceQuote: str = Field(min_length=1, max_length=500)
+
+
+class Selection(Contract):
+    recommendations: list[Recommendation] = Field(max_length=5)
+
+
+class SearchResponse(Contract):
+    status: Literal["COMPLETED", "NO_RESULTS", "NEEDS_CLARIFICATION"]
+    message: str
+    filters: Filters | None
+    recommendations: list[Recommendation]
+    retrievalMode: Literal["keyword"] = "keyword"

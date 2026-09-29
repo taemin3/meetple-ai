@@ -1,0 +1,28 @@
+name: Test AI service
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install and verify in Python container
+        run: |
+          docker run --rm -v "$PWD:/app" -w /app python:3.12-slim sh -ec '
+            pip install -r requirements.lock
+            pip install --no-deps -e .
+            ruff check .
+            ruff format --check .
+            pytest -q
+            python evals/run.py
+          '
