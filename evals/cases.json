@@ -10,6 +10,7 @@
   {"id":"books","query":"이번 주말 독서 모임","status":"COMPLETED","ids":[20]},
   {"id":"study","query":"이번 주말 자바 스터디","status":"COMPLETED","ids":[21]},
   {"id":"no_match","query":"이번 주말 수영 모임","status":"NO_RESULTS","ids":[]},
+  {"id":"nearby_generic","query":"내 근처 모임 추천해줘","status":"COMPLETED","ids":[],"checkIds":false,"filters":{"keyword":""}},
   {"id":"time_exact","query":"이번 주말 오후 3시에 시작하는 러닝 모임","status":"COMPLETED","ids":[10,11],"filters":{"startsAtTime":"15:00:00","endsBeforeTime":"16:00:00"}},
   {"id":"time_evening","query":"오늘 저녁 러닝 모임","status":"COMPLETED","ids":[12],"filters":{"startsAtTime":"18:00:00","endsBeforeTime":null}},
   {"id":"unsupported_region","query":"부산 해운대의 러닝 모임","status":"UNSUPPORTED","ids":[]},

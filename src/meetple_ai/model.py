@@ -51,11 +51,14 @@ class OpenAISearchModel:
             "처리할 수 없는 명시적 조건만 unsupportedReason에 짧은 한국어 안내문으로 넣는다. "
             "지원되는 조건이나 단순한 의미 차이는 unsupportedReason으로 보내지 않는다. 처리할 수 없는 "
             "조건을 조용히 버리지 않으며, unsupportedReason이 없으면 null. "
-            "위치 좌표는 입력으로 주어진 검색 중심을 사용하며 지역을 임의로 추정하지 않는다.",
+            "hasLocation=true이면 앱이 검색 중심 좌표를 이미 제공한 것이다. '내 근처', '주변', "
+            "'가까운 곳'은 지원되는 표현이므로 위치 안내나 unsupportedReason을 반환하지 않는다. "
+            "위치 좌표는 앱이 제공한 검색 중심을 사용하며 지역을 임의로 추정하지 않는다.",
             {
                 "query": request.query,
                 "referenceTime": request.referenceTime.isoformat(),
                 "categories": categories,
+                "hasLocation": request.latitude is not None and request.longitude is not None,
             },
             Intent,
         )

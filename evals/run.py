@@ -71,7 +71,10 @@ class FixtureTools:
 
 def grade(case, response):
     actual = {r.meetingId for r in response.recommendations}
-    result = {"status": response.status == case["status"], "ids": actual == set(case["ids"])}
+    result = {
+        "status": response.status == case["status"],
+        "ids": not case.get("checkIds", True) or actual == set(case["ids"]),
+    }
     filters = response.filters.model_dump(mode="json") if response.filters else {}
     result["filters"] = all(filters.get(k) == v for k, v in case.get("filters", {}).items())
     return result
