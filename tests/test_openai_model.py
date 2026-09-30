@@ -99,7 +99,7 @@ async def test_embedding_uses_configured_model_and_fixed_dimensions():
         )
     assert len(embedding) == 1536
     assert sent[0] == {
-        "input": "초보자 러닝 모임",
+        "input": ["초보자 러닝 모임"],
         "model": "test-embedding-model",
         "dimensions": 1536,
         "encoding_format": "float",
@@ -123,3 +123,9 @@ async def test_embedding_rejects_unexpected_dimensions():
     ) as client:
         with pytest.raises(ModelOutputError, match="임베딩 차원"):
             await OpenAISearchModel(client, "test-model", "test-embedding-model").embed("러닝")
+
+
+async def test_embedding_rejects_blank_input():
+    async with AsyncOpenAI(api_key="test-only", max_retries=0) as client:
+        with pytest.raises(ModelOutputError, match="임베딩 입력"):
+            await OpenAISearchModel(client, "test-model", "test-embedding-model").embed("   ")

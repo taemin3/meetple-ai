@@ -35,7 +35,7 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 
 ```text
 클라이언트 → Spring 로그인 검증 → Python FastAPI
-  → LangGraph: 위치 확인 → 조건 추출 → 날짜/반경 검증 → 질문 임베딩
+  → LangGraph: 위치 확인 → 조건 추출 → 날짜/반경 검증 → 선택적 질문 임베딩
   → MCP: search_meetings → Spring 내부 API → PostgreSQL/PostGIS
   → OpenAI: 후보 선택 + 원문 인용 → Python 검증
   → Spring: 차단·모집 상태와 원문 재검증 → 클라이언트
@@ -49,7 +49,7 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 - **PostgreSQL/PostGIS**: 날짜·카테고리·반경·모집 여부와 차단 관계로 후보를 제한한다.
 - **근거 검증**: 추천 ID가 실제 후보에 있고 인용문이 제목/본문의 연속된 원문인지 Python과 Spring에서 확인한다. 원문 검증만으로 의미적 적합성까지 보장하지는 않는다.
 
-현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩을 Spring 내부 검색 API로 전달하지만, pgvector 검색과 하이브리드 순위 결합은 백엔드 후속 단계에서 활성화한다. 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약, Flutter 화면도 후속 범위다. 이 단계에는 DB 마이그레이션이 없다.
+현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩을 Spring 내부 검색 API로 전달하며, Spring의 벡터 입력 검증과 pgvector 검색은 다음 개발 단계에서 같은 계약으로 구현한다. 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약, Flutter 화면도 후속 범위다. 이 단계에는 DB 마이그레이션이 없다.
 
 ## 검색 정책
 
@@ -104,7 +104,7 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 | `AI_SEARCH_CAPABILITY_SECRET` | 공유 키와 다른 32자 이상 임의 키. **Spring에만 설정** |
 | `AI_SEARCH_TIMEOUT` | 기본 `45s`, 최대 `60s` |
 
-`GET http://127.0.0.1:8001/healthz`는 프로세스 상태, `/readyz`는 생성 모델과 임베딩 모델 설정 유무만 확인한다. 실제 OpenAI 연결/잔액/모델 권한을 검사하는 프로브가 아니다.
+`GET http://127.0.0.1:8001/healthz`는 프로세스 상태, `/readyz`는 생성 모델과 임베딩 모델 설정 유무만 확인한다. 실제 OpenAI 연결·잔액·모델 권한을 검사하는 프로브가 아니다.
 
 이 저장소 루트에서 컨테이너 빌드: `docker build -t meetple-ai .`. 컨테이너 실행 시 `AI_BACKEND_URL`에는 Spring에 접근 가능한 사설 주소를 지정한다. Docker Compose/ECS 배포 설정은 이번 범위에 포함하지 않는다.
 
@@ -182,9 +182,9 @@ AI 테스트는 이 저장소 루트에서 실행한다:
 
 자동 테스트는 실제 LangGraph와 MCP HTTP 프로토콜, OpenAI SDK의 파싱을 사용하되 외부 HTTP 응답을 대체한다. 유료 API를 호출하지 않는다.
 
-`evals/cases.json`의 전체 질문은 날짜 해석, 초보자 근거, 빈 결과, 반경, 미지원 요청을 평가한다. 기본 실행은 데이터 형식만 검사한다. **모델 품질 통과 결과가 아니다.**
+`evals/cases.json`의 전체 질문은 날짜 해석, 초보자 근거, 빈 결과, 반경, 미지원 요청을 평가한다. 기본 실행은 데이터 형식만 검사한다. **모델 품질 통과 결과가 아니다.** 라이브 평가는 가상 모임 문서를 한 번에 임베딩한 뒤 질문 벡터와의 코사인 거리로 후보를 정렬하지만, Spring SQL과 실제 DB의 하이브리드 검색을 검증하지는 않는다.
 
-키와 모델 설정 후 아래 명령은 전체 문항에 유료 API를 호출한다(의미 조건이 있는 문항은 최대 3회). 먼저 `--limit 3`으로 확인할 수 있다.
+키와 모델 설정 후 아래 명령은 전체 문항에 유료 API를 호출한다(후보 문서 배치 1회와 의미 조건이 있는 문항당 최대 3회). 먼저 `--limit 3`으로 확인할 수 있다.
 
 ```powershell
 .venv\Scripts\python evals/run.py --live

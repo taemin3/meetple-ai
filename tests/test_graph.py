@@ -48,6 +48,11 @@ async def test_generic_search_skips_embedding_call(request_data, intent):
     assert tools.calls[1][1] is None
 
 
+def test_blank_semantic_query_is_normalized_to_none(intent):
+    normalized = intent.__class__.model_validate({**intent.model_dump(), "semanticQuery": "   "})
+    assert normalized.semanticQuery is None
+
+
 @pytest.mark.parametrize("field,value", [("radiusMeters", 5000), ("category", "없는 카테고리")])
 async def test_invalid_model_filters_do_not_reach_search(request_data, intent, field, value):
     intent = intent.model_copy(update={field: value})

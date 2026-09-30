@@ -72,18 +72,26 @@ class OpenAISearchModel:
         )
 
     async def embed(self, semantic_query: str) -> list[float]:
+        return (await self.embed_many([semantic_query]))[0]
+
+    async def embed_many(self, texts: list[str]) -> list[list[float]]:
+        if not texts or any(not text.strip() for text in texts):
+            raise ModelOutputError("임베딩 입력이 올바르지 않습니다.")
         response = await self.client.embeddings.create(
             model=self.embedding_model,
-            input=semantic_query,
+            input=texts,
             encoding_format="float",
             dimensions=EMBEDDING_DIMENSIONS,
         )
-        if len(response.data) != 1:
+        if len(response.data) != len(texts):
             raise ModelOutputError("임베딩 응답을 확인할 수 없습니다.")
-        embedding = response.data[0].embedding
-        if len(embedding) != EMBEDDING_DIMENSIONS or not all(math.isfinite(value) for value in embedding):
+        embeddings = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]
+        if any(
+            len(embedding) != EMBEDDING_DIMENSIONS or not all(math.isfinite(value) for value in embedding)
+            for embedding in embeddings
+        ):
             raise ModelOutputError("임베딩 차원 또는 값이 올바르지 않습니다.")
-        return embedding
+        return embeddings
 
     async def select(self, request: SearchRequest, candidates: list[Candidate]) -> Selection:
         # 모델 입력은 검색에 필요한 최소 필드만 포함하고, 호스트/회원 정보와 인증값은 제외한다.
