@@ -1,3 +1,4 @@
+import re
 from datetime import date, datetime, time, timedelta
 from typing import Protocol, TypedDict
 
@@ -27,6 +28,17 @@ class SearchState(TypedDict, total=False):
     candidates: Candidates
     selection: Selection
     response: SearchResponse
+
+
+TIME_PATTERN = re.compile(r"(?:[01]\d|2[0-3]):[0-5]\d")
+
+
+def parse_time_bound(value: str | None) -> time | None:
+    if value is None:
+        return None
+    if TIME_PATTERN.fullmatch(value) is None:
+        raise ValueError("검색할 시간을 다시 확인해주세요.")
+    return time.fromisoformat(value)
 
 
 def terminal(status: str, message: str) -> SearchResponse:
@@ -62,6 +74,9 @@ def resolve_filters(request: SearchRequest, intent: Intent, categories: list[str
     ends_before = datetime.combine(end, time.min)
     if starts_at >= ends_before:
         raise ValueError("앞으로 열리는 모임의 날짜를 입력해주세요.")
+    has_explicit_time = intent.startTime is not None or intent.endTime is not None
+    if intent.timeMode != "range" and has_explicit_time:
+        raise ValueError("검색할 시간을 다시 확인해주세요.")
     starts_at_time, ends_before_time = None, None
     if intent.timeMode == "morning":
         starts_at_time, ends_before_time = time(6), time(12)
@@ -70,14 +85,11 @@ def resolve_filters(request: SearchRequest, intent: Intent, categories: list[str
     elif intent.timeMode == "evening":
         starts_at_time = time(18)
     elif intent.timeMode == "range":
-        try:
-            starts_at_time = time.fromisoformat(intent.startTime) if intent.startTime else None
-            ends_before_time = time.fromisoformat(intent.endTime) if intent.endTime else None
-        except ValueError as exc:
-            raise ValueError("검색할 시간을 다시 확인해주세요.") from exc
+        starts_at_time = parse_time_bound(intent.startTime)
+        ends_before_time = parse_time_bound(intent.endTime)
         if starts_at_time is None and ends_before_time is None:
             raise ValueError("검색할 시간을 다시 확인해주세요.")
-    if starts_at_time is not None and ends_before_time is not None and starts_at_time >= ends_before_time:
+    if starts_at_time is not None and ends_before_time is not None and starts_at_time == ends_before_time:
         raise ValueError("검색할 시간 범위를 다시 확인해주세요.")
     return Filters(
         keyword=intent.keyword,

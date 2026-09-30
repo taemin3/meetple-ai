@@ -127,10 +127,10 @@ async def evaluate(cases, candidates):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 2회)")
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--limit", type=int, help="실행할 평가 문항 수 (기본: 전체)")
     parser.add_argument("--case", help="실행할 평가 문항 ID 하나")
     args = parser.parse_args()
-    if args.limit < 1:
+    if args.limit is not None and args.limit < 1:
         parser.error("--limit must be positive")
     cases, candidates = load_data()
     if not args.live:

@@ -97,3 +97,24 @@ def test_time_expression_becomes_deterministic_filter(
     filters = resolve_filters(request_data, intent, ["운동"])
     assert (filters.startsAtTime.isoformat() if filters.startsAtTime else None) == expected_start
     assert (filters.endsBeforeTime.isoformat() if filters.endsBeforeTime else None) == expected_end
+
+
+@pytest.mark.parametrize("mode", ["any", "morning", "afternoon", "evening"])
+def test_non_range_time_mode_rejects_explicit_bounds(request_data, intent, mode):
+    intent.timeMode, intent.startTime, intent.endTime = mode, "15:00", None
+    with pytest.raises(ValueError):
+        resolve_filters(request_data, intent, ["운동"])
+
+
+@pytest.mark.parametrize("value", ["5:00", "15:00:00", "15:00Z", "15:00+09:00"])
+def test_time_range_requires_exact_hh_mm(request_data, intent, value):
+    intent.timeMode, intent.startTime, intent.endTime = "range", value, "16:00"
+    with pytest.raises(ValueError):
+        resolve_filters(request_data, intent, ["운동"])
+
+
+def test_time_range_can_cross_midnight(request_data, intent):
+    intent.timeMode, intent.startTime, intent.endTime = "range", "23:30", "00:30"
+    filters = resolve_filters(request_data, intent, ["운동"])
+    assert filters.startsAtTime == datetime.strptime("23:30", "%H:%M").time()
+    assert filters.endsBeforeTime == datetime.strptime("00:30", "%H:%M").time()
