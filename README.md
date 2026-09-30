@@ -13,7 +13,7 @@ C:\project\meetple\
   ai\         Python AI 서버 (이 저장소)
 ```
 
-백엔드 기능 개발용 `backend-ai-search`는 별도의 Git worktree다. 해당 브랜치의 Spring 연동 코드가 main에 병합되기 전에는 그 worktree에서 Spring을 실행한다. 서버 연결은 폴더 상대 경로가 아닌 HTTP 환경변수로 설정한다.
+Spring은 `backend` 폴더에서 실행한다. AI 기능이 main에 병합되기 전에는 백엔드의 `feat/ai-search-foundation` 브랜치에서 연동을 검증한다. 서버 연결은 폴더 상대 경로가 아닌 HTTP 환경변수로 설정한다.
 
 ```text
 ai/
