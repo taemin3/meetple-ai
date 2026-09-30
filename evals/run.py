@@ -3,6 +3,7 @@
 import argparse
 import asyncio
 import json
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean
@@ -48,13 +49,14 @@ def make_request(case):
 class FixtureTools:
     """SQL-equivalent fixture filtering for model evaluation, not DB/MCP integration proof."""
 
-    def __init__(self, candidates):
+    def __init__(self, candidates, embeddings=None):
         self.candidates = candidates
+        self.embeddings = embeddings or {}
 
     async def categories(self):
         return CATEGORIES
 
-    async def search(self, f):
+    async def search(self, f, query_embedding):
         items = [
             c
             for c in self.candidates
@@ -63,10 +65,38 @@ class FixtureTools:
             and (not f.startsAtTime or c.scheduledAt.time() >= f.startsAtTime)
             and (not f.endsBeforeTime or c.scheduledAt.time() < f.endsBeforeTime)
             and c.distanceMeters <= f.radiusMeters
-            and f.keyword.lower() in (c.title + " " + c.description).lower()
         ]
-        items.sort(key=lambda c: (c.distanceMeters, c.scheduledAt, c.id))
+        if query_embedding is None:
+            items = [c for c in items if f.keyword.lower() in (c.title + " " + c.description).lower()]
+            items.sort(key=lambda c: (c.distanceMeters, c.scheduledAt, c.id))
+        else:
+            if set(c.id for c in items) - self.embeddings.keys():
+                raise ValueError("평가 후보 임베딩이 없습니다.")
+            items.sort(
+                key=lambda c: (
+                    cosine_distance(query_embedding, self.embeddings[c.id]),
+                    c.distanceMeters,
+                    c.scheduledAt,
+                    c.id,
+                )
+            )
         return Candidates(items=items[:20], hasMore=len(items) > 20)
+
+
+def cosine_distance(left, right):
+    denominator = math.sqrt(sum(value * value for value in left)) * math.sqrt(
+        sum(value * value for value in right)
+    )
+    if denominator == 0:
+        raise ValueError("평가 임베딩의 크기가 0입니다.")
+    return 1 - sum(a * b for a, b in zip(left, right, strict=True)) / denominator
+
+
+def candidate_document(candidate):
+    return (
+        f"제목: {candidate.title}\n카테고리: {candidate.categoryName}\n"
+        f"장소: {candidate.locationName}\n소개: {candidate.description}"
+    )
 
 
 def grade(case, response):
@@ -82,19 +112,30 @@ def grade(case, response):
 
 async def evaluate(cases, candidates):
     settings = Settings()
-    if not settings.openai_api_key.get_secret_value() or not settings.openai_model:
-        raise SystemExit("AI_OPENAI_API_KEY와 AI_OPENAI_MODEL을 설정해주세요.")
+    if (
+        not settings.openai_api_key.get_secret_value()
+        or not settings.openai_model
+        or not settings.openai_embedding_model
+    ):
+        raise SystemExit("AI_OPENAI_API_KEY, AI_OPENAI_MODEL, AI_OPENAI_EMBEDDING_MODEL을 설정해주세요.")
     rows = []
     async with AsyncOpenAI(
         api_key=settings.openai_api_key.get_secret_value(), timeout=12, max_retries=0
     ) as client:
-        model = OpenAISearchModel(client, settings.openai_model)
+        model = OpenAISearchModel(client, settings.openai_model, settings.openai_embedding_model)
+        candidate_embeddings = await model.embed_many(
+            [candidate_document(candidate) for candidate in candidates]
+        )
+        tools = FixtureTools(
+            candidates,
+            {candidate.id: embedding for candidate, embedding in zip(candidates, candidate_embeddings)},
+        )
         for case in cases:
             started = monotonic()
             row = {"id": case["id"]}
             try:
                 async with asyncio.timeout(35):
-                    result = await build_graph(model, FixtureTools(candidates)).ainvoke(
+                    result = await build_graph(model, tools).ainvoke(
                         {"request": make_request(case)}, {"recursion_limit": 10}
                     )
                 row["checks"] = grade(case, result["response"])
@@ -108,7 +149,8 @@ async def evaluate(cases, candidates):
     durations = sorted(r["durationMs"] for r in rows)
     report = {
         "model": settings.openai_model,
-        "scope": "synthetic fixtures; no Spring/MCP/DB",
+        "embeddingModel": settings.openai_embedding_model,
+        "scope": "synthetic fixtures with in-memory cosine ranking; no Spring/MCP/DB",
         "count": len(rows),
         "passed": sum(r["passed"] for r in rows),
         "meanMs": round(mean(durations)),
@@ -126,7 +168,11 @@ async def evaluate(cases, candidates):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 2회)")
+    parser.add_argument(
+        "--live",
+        action="store_true",
+        help="유료 OpenAI 호출 활성화 (후보 배치 1회 + 질문당 최대 3회)",
+    )
     parser.add_argument("--limit", type=int, help="실행할 평가 문항 수 (기본: 전체)")
     parser.add_argument("--case", help="실행할 평가 문항 ID 하나")
     args = parser.parse_args()

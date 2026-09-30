@@ -1,7 +1,7 @@
 from datetime import datetime, time
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Contract(BaseModel):
@@ -26,6 +26,7 @@ class SearchRequest(Contract):
 
 class Intent(Contract):
     keyword: str = Field(max_length=100)
+    semanticQuery: str | None = Field(min_length=1, max_length=500)
     category: str | None
     dateMode: Literal["any", "today", "tomorrow", "this_weekend", "next_weekend", "range"]
     startDate: str | None
@@ -35,6 +36,13 @@ class Intent(Contract):
     endTime: str | None
     radiusMeters: int | None
     unsupportedReason: str | None
+
+    @field_validator("semanticQuery", mode="before")
+    @classmethod
+    def normalize_blank_semantic_query(cls, value):
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 class Filters(Contract):

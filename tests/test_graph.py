@@ -15,8 +15,13 @@ async def test_real_graph_calls_search_and_returns_grounded_result(request_data,
     assert result["response"].status == "COMPLETED"
     assert result["response"].filters.startsAt == datetime(2026, 10, 3)
     assert result["response"].filters.endsBefore == datetime(2026, 10, 5)
-    assert model.calls == ["interpret", "select"]
+    assert model.calls == [
+        "interpret",
+        ("embed", "초보자가 참여할 수 있는 러닝 모임"),
+        "select",
+    ]
     assert len(tools.calls) == 2
+    assert len(tools.calls[1][1]) == 1536
 
 
 async def test_missing_location_does_not_call_model_or_search(request_data, intent):
@@ -31,7 +36,21 @@ async def test_empty_search_skips_second_model_call(request_data, intent):
     model = FakeModel(intent)
     result = await build_graph(model, FakeTools()).ainvoke({"request": request_data})
     assert result["response"].status == "NO_RESULTS"
+    assert model.calls == ["interpret", ("embed", "초보자가 참여할 수 있는 러닝 모임")]
+
+
+async def test_generic_search_skips_embedding_call(request_data, intent):
+    intent.semanticQuery = None
+    model, tools = FakeModel(intent), FakeTools()
+    result = await build_graph(model, tools).ainvoke({"request": request_data})
+    assert result["response"].status == "NO_RESULTS"
     assert model.calls == ["interpret"]
+    assert tools.calls[1][1] is None
+
+
+def test_blank_semantic_query_is_normalized_to_none(intent):
+    normalized = intent.__class__.model_validate({**intent.model_dump(), "semanticQuery": "   "})
+    assert normalized.semanticQuery is None
 
 
 @pytest.mark.parametrize("field,value", [("radiusMeters", 5000), ("category", "없는 카테고리")])

@@ -34,8 +34,10 @@ class BackendClient:
             raise BackendUnavailable("카테고리 응답이 올바르지 않습니다.")
         return data
 
-    async def search(self, capability: str, filters: Filters) -> Candidates:
-        data = await self._request(
-            "POST", "/internal/ai/search/meetings", capability, filters.model_dump(mode="json")
-        )
+    async def search(
+        self, capability: str, filters: Filters, query_embedding: list[float] | None
+    ) -> Candidates:
+        body = filters.model_dump(mode="json")
+        body["queryEmbedding"] = query_embedding
+        data = await self._request("POST", "/internal/ai/search/meetings", capability, body)
         return Candidates.model_validate(data)

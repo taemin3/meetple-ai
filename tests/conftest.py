@@ -20,6 +20,7 @@ def request_data():
 def intent():
     return Intent(
         keyword="러닝",
+        semanticQuery="초보자가 참여할 수 있는 러닝 모임",
         category="운동",
         dateMode="this_weekend",
         startDate=None,
@@ -58,6 +59,10 @@ class FakeModel:
         self.calls.append("interpret")
         return self.intent
 
+    async def embed(self, semantic_query):
+        self.calls.append(("embed", semantic_query))
+        return [0.01] * 1536
+
     async def select(self, request, candidates):
         self.calls.append("select")
         return self.selection
@@ -72,6 +77,6 @@ class FakeTools:
         self.calls.append("categories")
         return ["운동", "취미", "스터디"]
 
-    async def search(self, filters):
-        self.calls.append(filters)
+    async def search(self, filters, query_embedding):
+        self.calls.append((filters, query_embedding))
         return Candidates(items=self.items, hasMore=self.has_more)

@@ -8,6 +8,7 @@ from mcp.types import ToolAnnotations
 
 from meetple_ai.backend import BackendClient, BackendUnavailable
 from meetple_ai.contracts import Candidates, Filters
+from meetple_ai.model import EMBEDDING_DIMENSIONS
 
 
 def build_mcp(backend: BackendClient) -> FastMCP:
@@ -16,7 +17,7 @@ def build_mcp(backend: BackendClient) -> FastMCP:
         stateless_http=True,
         json_response=True,
         streamable_http_path="/",
-        max_request_body_size=16384,
+        max_request_body_size=65536,
     )
     annotations = ToolAnnotations(readOnlyHint=True, destructiveHint=False, openWorldHint=False)
 
@@ -34,9 +35,13 @@ def build_mcp(backend: BackendClient) -> FastMCP:
         return {"categories": await backend.categories(capability(ctx))}
 
     @server.tool(annotations=annotations)
-    async def search_meetings(filters: Filters, ctx: Context) -> Candidates:
+    async def search_meetings(
+        filters: Filters, queryEmbedding: list[float] | None, ctx: Context
+    ) -> Candidates:
         """날짜·거리·모집 상태·차단 규칙을 적용해 모임 후보를 조회합니다. 날짜 끝은 미포함입니다."""
-        return await backend.search(capability(ctx), filters)
+        if queryEmbedding is not None and len(queryEmbedding) != EMBEDDING_DIMENSIONS:
+            raise ValueError("질문 임베딩 차원이 올바르지 않습니다.")
+        return await backend.search(capability(ctx), filters, queryEmbedding)
 
     return server
 
@@ -54,8 +59,11 @@ class McpMeetingTools:
     async def categories(self) -> list[str]:
         return (await self._call("list_categories", {}))["categories"]
 
-    async def search(self, filters: Filters) -> Candidates:
-        result = await self._call("search_meetings", {"filters": filters.model_dump(mode="json")})
+    async def search(self, filters: Filters, query_embedding: list[float] | None) -> Candidates:
+        result = await self._call(
+            "search_meetings",
+            {"filters": filters.model_dump(mode="json"), "queryEmbedding": query_embedding},
+        )
         return Candidates.model_validate(result)
 
 
