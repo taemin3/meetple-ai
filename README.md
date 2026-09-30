@@ -36,7 +36,7 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 ```text
 클라이언트 → Spring 로그인 검증 → Python FastAPI
   → LangGraph: 위치 확인 → 조건 추출 → 날짜/반경 검증 → 선택적 질문 임베딩
-  → MCP: search_meetings → Spring 내부 API → PostgreSQL/PostGIS
+  → MCP: search_meetings → Spring 내부 API → PostgreSQL/PostGIS/pgvector
   → OpenAI: 후보 선택 + 원문 인용 → Python 검증
   → Spring: 차단·모집 상태와 원문 재검증 → 클라이언트
 ```
@@ -49,7 +49,7 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 - **PostgreSQL/PostGIS**: 날짜·카테고리·반경·모집 여부와 차단 관계로 후보를 제한한다.
 - **근거 검증**: 추천 ID가 실제 후보에 있고 인용문이 제목/본문의 연속된 원문인지 Python과 Spring에서 확인한다. 원문 검증만으로 의미적 적합성까지 보장하지는 않는다.
 
-현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩을 Spring 내부 검색 API로 전달하며, Spring의 벡터 입력 검증과 pgvector 검색은 다음 개발 단계에서 같은 계약으로 구현한다. 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약, Flutter 화면도 후속 범위다. 이 단계에는 DB 마이그레이션이 없다.
+현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩과 `AI_OPENAI_EMBEDDING_MODEL` 식별자를 Spring 내부 검색 API로 함께 전달한다. Spring은 같은 모델로 저장된 모임 벡터만 pgvector 의미 검색에 사용한다. 모임 임베딩 갱신·백필, 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약과 Flutter 화면은 후속 범위다.
 
 ## 검색 정책
 

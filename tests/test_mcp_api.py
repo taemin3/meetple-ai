@@ -29,6 +29,7 @@ async def test_fastapi_graph_mcp_and_backend_contract(request_data, intent, cand
         else:
             body = json.loads(request.content)
             assert len(body["queryEmbedding"]) == 1536
+            assert body["queryEmbeddingModel"] == "test-embedding-model"
             data = {"items": [candidate.model_dump(mode="json")], "hasMore": False}
         return httpx.Response(200, json={"success": True, "data": data})
 
@@ -37,7 +38,7 @@ async def test_fastapi_graph_mcp_and_backend_contract(request_data, intent, cand
     async with httpx.AsyncClient(
         base_url="http://backend", transport=httpx.MockTransport(handle_backend)
     ) as client:
-        backend = BackendClient(client, TOKEN)
+        backend = BackendClient(client, TOKEN, "test-embedding-model")
 
         def factory(**kwargs):
             return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), **kwargs)
@@ -98,5 +99,5 @@ async def test_backend_rejects_unauthorized_envelope_without_leaking_body():
         from meetple_ai.backend import BackendUnavailable
 
         with pytest.raises(BackendUnavailable, match="모임 정보를 조회할 수 없습니다") as error:
-            await BackendClient(client, TOKEN).categories(CAPABILITY)
+            await BackendClient(client, TOKEN, "test-embedding-model").categories(CAPABILITY)
         assert "must-not-leak" not in str(error.value)
