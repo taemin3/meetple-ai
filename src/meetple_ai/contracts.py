@@ -26,6 +26,7 @@ class SearchRequest(Contract):
 
 class Intent(Contract):
     keyword: str = Field(max_length=100)
+    semanticQuery: str | None = Field(max_length=500)
     category: str | None
     dateMode: Literal["any", "today", "tomorrow", "this_weekend", "next_weekend", "range"]
     startDate: str | None

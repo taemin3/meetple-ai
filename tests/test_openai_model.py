@@ -43,7 +43,9 @@ async def test_real_sdk_uses_strict_schema_and_disables_storage(request_data, in
         max_retries=0,
         http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
     ) as client:
-        actual = await OpenAISearchModel(client, "test-model").interpret(request_data, ["운동"])
+        actual = await OpenAISearchModel(client, "test-model", "test-embedding-model").interpret(
+            request_data, ["운동"]
+        )
     assert actual == intent
     assert sent[0]["store"] is False
     assert sent[0]["text"]["format"]["strict"] is True
@@ -67,4 +69,57 @@ async def test_refusal_and_incomplete_output_fail_closed(request_data, status, c
         api_key="test-only", max_retries=0, http_client=httpx.AsyncClient(transport=transport)
     ) as client:
         with pytest.raises(ModelOutputError):
-            await OpenAISearchModel(client, "test-model").interpret(request_data, ["운동"])
+            await OpenAISearchModel(client, "test-model", "test-embedding-model").interpret(
+                request_data, ["운동"]
+            )
+
+
+async def test_embedding_uses_configured_model_and_fixed_dimensions():
+    sent = []
+
+    def respond(request):
+        sent.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.01] * 1536}],
+                "model": "test-embedding-model",
+                "usage": {"prompt_tokens": 5, "total_tokens": 5},
+            },
+        )
+
+    async with AsyncOpenAI(
+        api_key="test-only",
+        max_retries=0,
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        embedding = await OpenAISearchModel(client, "test-model", "test-embedding-model").embed(
+            "초보자 러닝 모임"
+        )
+    assert len(embedding) == 1536
+    assert sent[0] == {
+        "input": "초보자 러닝 모임",
+        "model": "test-embedding-model",
+        "dimensions": 1536,
+        "encoding_format": "float",
+    }
+
+
+async def test_embedding_rejects_unexpected_dimensions():
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.01]}],
+                "model": "test-embedding-model",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+    async with AsyncOpenAI(
+        api_key="test-only", max_retries=0, http_client=httpx.AsyncClient(transport=transport)
+    ) as client:
+        with pytest.raises(ModelOutputError, match="임베딩 차원"):
+            await OpenAISearchModel(client, "test-model", "test-embedding-model").embed("러닝")

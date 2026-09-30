@@ -35,7 +35,7 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 
 ```text
 클라이언트 → Spring 로그인 검증 → Python FastAPI
-  → LangGraph: 위치 확인 → 조건 추출 → 날짜/반경 검증
+  → LangGraph: 위치 확인 → 조건 추출 → 날짜/반경 검증 → 질문 임베딩
   → MCP: search_meetings → Spring 내부 API → PostgreSQL/PostGIS
   → OpenAI: 후보 선택 + 원문 인용 → Python 검증
   → Spring: 차단·모집 상태와 원문 재검증 → 클라이언트
@@ -43,12 +43,13 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 
 - **FastAPI**: 내부 검색 요청, 상태 확인, MCP HTTP 경로 제공.
 - **LangGraph**: 검색 단계와 조건부 분기 관리. 빈 결과면 두 번째 모델 호출 생략.
-- **OpenAI Responses API / Structured Outputs**: 조건과 추천 결과를 Pydantic 스키마로 파싱. 요청당 최대 2회, 자동 재시도 없음.
+- **OpenAI Responses API / Structured Outputs**: 조건과 추천 결과를 Pydantic 스키마로 파싱. 자동 재시도 없음.
+- **OpenAI Embeddings API**: 의미 조건이 있는 `semanticQuery`를 1536차원 질문 벡터로 변환한다. 광범위한 검색은 호출을 생략한다.
 - **MCP Python SDK**: `list_categories`, `search_meetings` 읽기 도구 제공. 실제 Streamable HTTP 프로토콜로 호출한다.
 - **PostgreSQL/PostGIS**: 날짜·카테고리·반경·모집 여부와 차단 관계로 후보를 제한한다.
 - **근거 검증**: 추천 ID가 실제 후보에 있고 인용문이 제목/본문의 연속된 원문인지 Python과 Spring에서 확인한다. 원문 검증만으로 의미적 적합성까지 보장하지는 않는다.
 
-현재 `retrievalMode=keyword`이며 제목·본문의 단어 검색을 사용한다. 임베딩, pgvector, 의미 검색, 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약, Flutter 화면은 후속 범위다. 이 단계에는 DB 마이그레이션이 없다.
+현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩을 Spring 내부 검색 API로 전달하지만, pgvector 검색과 하이브리드 순위 결합은 백엔드 후속 단계에서 활성화한다. 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약, Flutter 화면도 후속 범위다. 이 단계에는 DB 마이그레이션이 없다.
 
 ## 검색 정책
 
@@ -83,10 +84,11 @@ Copy-Item .env.example .env
 | `AI_SERVICE_TOKEN` | Spring과 공유하는 임의의 32자 이상 키 |
 | `AI_OPENAI_API_KEY` | OpenAI API 키 |
 | `AI_OPENAI_MODEL` | 계정에서 사용 가능한 Responses + Structured Outputs 지원 모델 ID |
+| `AI_OPENAI_EMBEDDING_MODEL` | `vector(1536)`과 맞는 임베딩 모델 ID. 예: `text-embedding-3-small` |
 | `AI_BACKEND_URL` | 기본 `http://127.0.0.1:8080` |
 | `AI_MCP_URL` | 기본 `http://127.0.0.1:8001/mcp/` |
 
-모델 ID는 환경변수로 지정하며 기본값이 없다. 모델 접근 권한과 실제 응답 품질은 직접 호출해 확인해야 한다.
+생성 모델 ID에는 기본값이 없으며 환경변수로 지정한다. 임베딩 모델 예시는 `text-embedding-3-small`이지만 계정의 모델 접근 권한과 실제 응답 품질은 직접 호출해 확인해야 한다.
 
 ```powershell
 .venv\Scripts\python -m uvicorn meetple_ai.app:app --host 127.0.0.1 --port 8001
@@ -102,7 +104,7 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 | `AI_SEARCH_CAPABILITY_SECRET` | 공유 키와 다른 32자 이상 임의 키. **Spring에만 설정** |
 | `AI_SEARCH_TIMEOUT` | 기본 `45s`, 최대 `60s` |
 
-`GET http://127.0.0.1:8001/healthz`는 프로세스 상태, `/readyz`는 모델 설정 유무만 확인한다. 실제 OpenAI 연결/잔액/모델 권한을 검사하는 프로브가 아니다.
+`GET http://127.0.0.1:8001/healthz`는 프로세스 상태, `/readyz`는 생성 모델과 임베딩 모델 설정 유무만 확인한다. 실제 OpenAI 연결/잔액/모델 권한을 검사하는 프로브가 아니다.
 
 이 저장소 루트에서 컨테이너 빌드: `docker build -t meetple-ai .`. 컨테이너 실행 시 `AI_BACKEND_URL`에는 Spring에 접근 가능한 사설 주소를 지정한다. Docker Compose/ECS 배포 설정은 이번 범위에 포함하지 않는다.
 
@@ -155,7 +157,7 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 - 로그아웃 직전에 발급된 검색 권한은 최대 90초 유효할 수 있다. 조회에서는 탈퇴 회원과 차단한 모임장을 제외하며 최종 추천 직전에 다시 조회한다.
 - DB 조회 중에만 DB 연결을 사용한다. LLM 응답을 기다리는 동안 Spring 트랜잭션을 유지하지 않는다.
 - Python 프로세스당 동시 검색 4개, 대기 포함 전체 35초, 모델 호출당 12초. 사용자별/분산 요청 제한과 비용 한도는 아직 없으므로 운영 활성화 전에 추가해야 한다.
-- OpenAI에는 질문·기준 시각·카테고리·위치 제공 여부와 후보 제목/설명/일시/거리만 전송한다. 실제 좌표·회원 정보·인증 헤더는 모델 입력에서 제외한다. 설명은 후보당 1,800자로 제한한다.
+- OpenAI에는 질문·기준 시각·카테고리·위치 제공 여부와 후보 제목/설명/일시/거리만 전송한다. 의미 조건이 있으면 모델이 만든 `semanticQuery`도 임베딩 API에 전달한다. 실제 좌표·회원 정보·인증 헤더는 모델 입력에서 제외한다. 설명은 후보당 1,800자로 제한한다.
 - 모델 호출에는 `store=false`를 지정한다. 외부 공급자의 모든 데이터 보관 정책을 제어한다는 뜻은 아니다. 실제 사용자 데이터로 출시하기 전 개인정보 안내를 검토해야 한다.
 - 앱 로그에는 질문·후보 본문·인증값 대신 임의 요청 ID, 시간, 결과 상태를 기록한다. 프록시/APM의 별도 본문 로깅도 확인해야 한다.
 
@@ -167,7 +169,7 @@ Spring 테스트는 별도 백엔드 저장소 루트에서 실행한다:
 .\gradlew.bat test
 ```
 
-PostGIS 테스트는 기존 `meetple-postgres:16-3.5-bigm` 이미지를 사용한다. Docker가 없으면 건너뛰며 기존 Spring 보안 테스트에는 Redis가 필요하다.
+PostGIS·pgvector 테스트는 `meetple-postgres:16-3.5-bigm-vector0.8.6` 이미지를 사용한다. Docker가 없으면 건너뛰며 기존 Spring 보안 테스트에는 Redis가 필요하다.
 
 AI 테스트는 이 저장소 루트에서 실행한다:
 
@@ -182,7 +184,7 @@ AI 테스트는 이 저장소 루트에서 실행한다:
 
 `evals/cases.json`의 전체 질문은 날짜 해석, 초보자 근거, 빈 결과, 반경, 미지원 요청을 평가한다. 기본 실행은 데이터 형식만 검사한다. **모델 품질 통과 결과가 아니다.**
 
-키와 모델 설정 후 아래 명령은 전체 문항에 유료 API를 호출한다(문항당 최대 2회). 먼저 `--limit 3`으로 확인할 수 있다.
+키와 모델 설정 후 아래 명령은 전체 문항에 유료 API를 호출한다(의미 조건이 있는 문항은 최대 3회). 먼저 `--limit 3`으로 확인할 수 있다.
 
 ```powershell
 .venv\Scripts\python evals/run.py --live

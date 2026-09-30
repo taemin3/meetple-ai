@@ -1,3 +1,4 @@
+import json
 from contextlib import asynccontextmanager
 
 import httpx
@@ -26,6 +27,8 @@ async def test_fastapi_graph_mcp_and_backend_contract(request_data, intent, cand
         if request.url.path.endswith("categories"):
             data = ["운동"]
         else:
+            body = json.loads(request.content)
+            assert len(body["queryEmbedding"]) == 1536
             data = {"items": [candidate.model_dump(mode="json")], "hasMore": False}
         return httpx.Response(200, json={"success": True, "data": data})
 

@@ -17,7 +17,7 @@ from meetple_ai.model import ModelOutputError, SearchModel
 
 class MeetingTools(Protocol):
     async def categories(self) -> list[str]: ...
-    async def search(self, filters: Filters) -> Candidates: ...
+    async def search(self, filters: Filters, query_embedding: list[float] | None) -> Candidates: ...
 
 
 class SearchState(TypedDict, total=False):
@@ -25,6 +25,7 @@ class SearchState(TypedDict, total=False):
     categories: list[str]
     intent: Intent
     filters: Filters
+    query_embedding: list[float] | None
     candidates: Candidates
     selection: Selection
     response: SearchResponse
@@ -124,8 +125,14 @@ def build_graph(model: SearchModel, tools: MeetingTools):
                 "response": terminal("INPUT_REQUIRED", "검색할 날짜·시간·카테고리·반경을 다시 확인해주세요.")
             }
 
+    async def embed(state: SearchState):
+        semantic_query = state["intent"].semanticQuery
+        if semantic_query is None:
+            return {"query_embedding": None}
+        return {"query_embedding": await model.embed(semantic_query)}
+
     async def retrieve(state: SearchState):
-        candidates = await tools.search(state["filters"])
+        candidates = await tools.search(state["filters"], state.get("query_embedding"))
         if not candidates.items:
             return {
                 "response": SearchResponse(
@@ -177,6 +184,7 @@ def build_graph(model: SearchModel, tools: MeetingTools):
         ("prepare", prepare),
         ("interpret", interpret),
         ("resolve", resolve),
+        ("embed", embed),
         ("retrieve", retrieve),
         ("select", select),
         ("verify", verify),
@@ -185,7 +193,8 @@ def build_graph(model: SearchModel, tools: MeetingTools):
     graph.add_edge(START, "prepare")
     graph.add_conditional_edges("prepare", lambda s: END if "response" in s else "interpret")
     graph.add_edge("interpret", "resolve")
-    graph.add_conditional_edges("resolve", lambda s: END if "response" in s else "retrieve")
+    graph.add_conditional_edges("resolve", lambda s: END if "response" in s else "embed")
+    graph.add_edge("embed", "retrieve")
     graph.add_conditional_edges("retrieve", lambda s: END if "response" in s else "select")
     graph.add_edge("select", "verify")
     graph.add_edge("verify", END)

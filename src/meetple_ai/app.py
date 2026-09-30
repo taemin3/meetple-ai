@@ -33,7 +33,11 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
             timeout=12,
             max_retries=0,
         )
-        model = OpenAISearchModel(openai_client, settings.openai_model)
+        model = OpenAISearchModel(
+            openai_client,
+            settings.openai_model,
+            settings.openai_embedding_model,
+        )
     slots = asyncio.Semaphore(4)
 
     @asynccontextmanager

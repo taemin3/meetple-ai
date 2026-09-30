@@ -54,7 +54,7 @@ class FixtureTools:
     async def categories(self):
         return CATEGORIES
 
-    async def search(self, f):
+    async def search(self, f, query_embedding):
         items = [
             c
             for c in self.candidates
@@ -82,13 +82,17 @@ def grade(case, response):
 
 async def evaluate(cases, candidates):
     settings = Settings()
-    if not settings.openai_api_key.get_secret_value() or not settings.openai_model:
-        raise SystemExit("AI_OPENAI_API_KEY와 AI_OPENAI_MODEL을 설정해주세요.")
+    if (
+        not settings.openai_api_key.get_secret_value()
+        or not settings.openai_model
+        or not settings.openai_embedding_model
+    ):
+        raise SystemExit("AI_OPENAI_API_KEY, AI_OPENAI_MODEL, AI_OPENAI_EMBEDDING_MODEL을 설정해주세요.")
     rows = []
     async with AsyncOpenAI(
         api_key=settings.openai_api_key.get_secret_value(), timeout=12, max_retries=0
     ) as client:
-        model = OpenAISearchModel(client, settings.openai_model)
+        model = OpenAISearchModel(client, settings.openai_model, settings.openai_embedding_model)
         for case in cases:
             started = monotonic()
             row = {"id": case["id"]}
@@ -108,6 +112,7 @@ async def evaluate(cases, candidates):
     durations = sorted(r["durationMs"] for r in rows)
     report = {
         "model": settings.openai_model,
+        "embeddingModel": settings.openai_embedding_model,
         "scope": "synthetic fixtures; no Spring/MCP/DB",
         "count": len(rows),
         "passed": sum(r["passed"] for r in rows),
@@ -126,7 +131,7 @@ async def evaluate(cases, candidates):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 2회)")
+    parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 3회)")
     parser.add_argument("--limit", type=int, help="실행할 평가 문항 수 (기본: 전체)")
     parser.add_argument("--case", help="실행할 평가 문항 ID 하나")
     args = parser.parse_args()
