@@ -24,7 +24,11 @@ logger = logging.getLogger("meetple_ai")
 def create_app(settings: Settings | None = None, *, backend=None, model=None, tools_factory=connect_tools):
     settings = settings or Settings()
     backend_http = httpx.AsyncClient(base_url=settings.backend_url, timeout=5, trust_env=False)
-    backend = backend or BackendClient(backend_http, settings.service_token.get_secret_value())
+    backend = backend or BackendClient(
+        backend_http,
+        settings.service_token.get_secret_value(),
+        settings.openai_embedding_model,
+    )
     mcp = build_mcp(backend)
     openai_client = None
     if model is None and settings.ready:

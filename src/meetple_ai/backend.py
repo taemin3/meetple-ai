@@ -8,9 +8,10 @@ class BackendUnavailable(Exception):
 
 
 class BackendClient:
-    def __init__(self, client: httpx.AsyncClient, service_token: str):
+    def __init__(self, client: httpx.AsyncClient, service_token: str, embedding_model: str):
         self.client = client
         self.service_token = service_token
+        self.embedding_model = embedding_model
 
     async def _request(self, method: str, path: str, capability: str, body=None):
         try:
@@ -39,5 +40,6 @@ class BackendClient:
     ) -> Candidates:
         body = filters.model_dump(mode="json")
         body["queryEmbedding"] = query_embedding
+        body["queryEmbeddingModel"] = self.embedding_model if query_embedding is not None else None
         data = await self._request("POST", "/internal/ai/search/meetings", capability, body)
         return Candidates.model_validate(data)
