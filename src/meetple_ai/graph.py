@@ -29,8 +29,8 @@ class SearchState(TypedDict, total=False):
     response: SearchResponse
 
 
-def clarification(message: str) -> SearchResponse:
-    return SearchResponse(status="NEEDS_CLARIFICATION", message=message, filters=None, recommendations=[])
+def terminal(status: str, message: str) -> SearchResponse:
+    return SearchResponse(status=status, message=message, filters=None, recommendations=[])
 
 
 def resolve_filters(request: SearchRequest, intent: Intent, categories: list[str]) -> Filters:
@@ -62,11 +62,30 @@ def resolve_filters(request: SearchRequest, intent: Intent, categories: list[str
     ends_before = datetime.combine(end, time.min)
     if starts_at >= ends_before:
         raise ValueError("앞으로 열리는 모임의 날짜를 입력해주세요.")
+    starts_at_time, ends_before_time = None, None
+    if intent.timeMode == "morning":
+        starts_at_time, ends_before_time = time(6), time(12)
+    elif intent.timeMode == "afternoon":
+        starts_at_time, ends_before_time = time(12), time(18)
+    elif intent.timeMode == "evening":
+        starts_at_time = time(18)
+    elif intent.timeMode == "range":
+        try:
+            starts_at_time = time.fromisoformat(intent.startTime) if intent.startTime else None
+            ends_before_time = time.fromisoformat(intent.endTime) if intent.endTime else None
+        except ValueError as exc:
+            raise ValueError("검색할 시간을 다시 확인해주세요.") from exc
+        if starts_at_time is None and ends_before_time is None:
+            raise ValueError("검색할 시간을 다시 확인해주세요.")
+    if starts_at_time is not None and ends_before_time is not None and starts_at_time >= ends_before_time:
+        raise ValueError("검색할 시간 범위를 다시 확인해주세요.")
     return Filters(
         keyword=intent.keyword,
         category=intent.category,
         startsAt=starts_at,
         endsBefore=ends_before,
+        startsAtTime=starts_at_time,
+        endsBeforeTime=ends_before_time,
         latitude=request.latitude,
         longitude=request.longitude,
         radiusMeters=radius,
@@ -76,7 +95,7 @@ def resolve_filters(request: SearchRequest, intent: Intent, categories: list[str
 def build_graph(model: SearchModel, tools: MeetingTools):
     async def prepare(state: SearchState):
         if state["request"].latitude is None:
-            return {"response": clarification("앱에서 검색 기준 위치를 선택해주세요.")}
+            return {"response": terminal("INPUT_REQUIRED", "앱에서 검색 기준 위치를 선택해주세요.")}
         return {"categories": await tools.categories()}
 
     async def interpret(state: SearchState):
@@ -84,12 +103,14 @@ def build_graph(model: SearchModel, tools: MeetingTools):
 
     def resolve(state: SearchState):
         intent = state["intent"]
-        if intent.clarification:
-            return {"response": clarification(intent.clarification[:500])}
+        if intent.unsupportedReason:
+            return {"response": terminal("UNSUPPORTED", intent.unsupportedReason[:500])}
         try:
             return {"filters": resolve_filters(state["request"], intent, state["categories"])}
         except (ValueError, OverflowError):
-            return {"response": clarification("검색할 날짜·카테고리·반경을 다시 확인해주세요.")}
+            return {
+                "response": terminal("INPUT_REQUIRED", "검색할 날짜·시간·카테고리·반경을 다시 확인해주세요.")
+            }
 
     async def retrieve(state: SearchState):
         candidates = await tools.search(state["filters"])

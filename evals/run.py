@@ -30,7 +30,7 @@ def load_data():
     for case in cases:
         make_request(case)
         assert set(case["ids"]) <= ids
-        assert case["status"] in ("COMPLETED", "NO_RESULTS", "NEEDS_CLARIFICATION")
+        assert case["status"] in ("COMPLETED", "NO_RESULTS", "INPUT_REQUIRED", "UNSUPPORTED")
     return cases, candidates
 
 
@@ -60,6 +60,8 @@ class FixtureTools:
             for c in self.candidates
             if (not f.category or c.categoryName == f.category)
             and f.startsAt <= c.scheduledAt < f.endsBefore
+            and (not f.startsAtTime or c.scheduledAt.time() >= f.startsAtTime)
+            and (not f.endsBeforeTime or c.scheduledAt.time() < f.endsBeforeTime)
             and c.distanceMeters <= f.radiusMeters
             and f.keyword.lower() in (c.title + " " + c.description).lower()
         ]
@@ -123,6 +125,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 2회)")
     parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--case", help="실행할 평가 문항 ID 하나")
     args = parser.parse_args()
     if args.limit < 1:
         parser.error("--limit must be positive")
@@ -130,7 +133,10 @@ def main():
     if not args.live:
         print(f"Validated {len(cases)} cases and {len(candidates)} synthetic candidates. No API calls.")
         return 0
-    return asyncio.run(evaluate(cases[: args.limit], candidates))
+    selected = [case for case in cases if case["id"] == args.case] if args.case else cases[: args.limit]
+    if not selected:
+        parser.error(f"unknown case: {args.case}")
+    return asyncio.run(evaluate(selected, candidates))
 
 
 if __name__ == "__main__":
