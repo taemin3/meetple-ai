@@ -48,8 +48,10 @@ async def test_real_sdk_uses_strict_schema_and_disables_storage(request_data, in
     assert sent[0]["store"] is False
     assert sent[0]["text"]["format"]["strict"] is True
     assert sent[0]["text"]["format"]["type"] == "json_schema"
-    assert "latitude" not in sent[0]["input"]
-    assert "longitude" not in sent[0]["input"]
+    model_input = json.loads(sent[0]["input"])
+    assert model_input["hasLocation"] is True
+    assert "latitude" not in model_input
+    assert "longitude" not in model_input
 
 
 @pytest.mark.parametrize(

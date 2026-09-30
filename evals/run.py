@@ -30,7 +30,7 @@ def load_data():
     for case in cases:
         make_request(case)
         assert set(case["ids"]) <= ids
-        assert case["status"] in ("COMPLETED", "NO_RESULTS", "NEEDS_CLARIFICATION")
+        assert case["status"] in ("COMPLETED", "NO_RESULTS", "INPUT_REQUIRED", "UNSUPPORTED")
     return cases, candidates
 
 
@@ -60,6 +60,8 @@ class FixtureTools:
             for c in self.candidates
             if (not f.category or c.categoryName == f.category)
             and f.startsAt <= c.scheduledAt < f.endsBefore
+            and (not f.startsAtTime or c.scheduledAt.time() >= f.startsAtTime)
+            and (not f.endsBeforeTime or c.scheduledAt.time() < f.endsBeforeTime)
             and c.distanceMeters <= f.radiusMeters
             and f.keyword.lower() in (c.title + " " + c.description).lower()
         ]
@@ -69,7 +71,10 @@ class FixtureTools:
 
 def grade(case, response):
     actual = {r.meetingId for r in response.recommendations}
-    result = {"status": response.status == case["status"], "ids": actual == set(case["ids"])}
+    result = {
+        "status": response.status == case["status"],
+        "ids": not case.get("checkIds", True) or actual == set(case["ids"]),
+    }
     filters = response.filters.model_dump(mode="json") if response.filters else {}
     result["filters"] = all(filters.get(k) == v for k, v in case.get("filters", {}).items())
     return result
@@ -122,15 +127,19 @@ async def evaluate(cases, candidates):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true", help="유료 OpenAI 호출 활성화 (질문당 최대 2회)")
-    parser.add_argument("--limit", type=int, default=20)
+    parser.add_argument("--limit", type=int, help="실행할 평가 문항 수 (기본: 전체)")
+    parser.add_argument("--case", help="실행할 평가 문항 ID 하나")
     args = parser.parse_args()
-    if args.limit < 1:
+    if args.limit is not None and args.limit < 1:
         parser.error("--limit must be positive")
     cases, candidates = load_data()
     if not args.live:
         print(f"Validated {len(cases)} cases and {len(candidates)} synthetic candidates. No API calls.")
         return 0
-    return asyncio.run(evaluate(cases[: args.limit], candidates))
+    selected = [case for case in cases if case["id"] == args.case] if args.case else cases[: args.limit]
+    if not selected:
+        parser.error(f"unknown case: {args.case}")
+    return asyncio.run(evaluate(selected, candidates))
 
 
 if __name__ == "__main__":

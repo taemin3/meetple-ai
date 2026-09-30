@@ -41,14 +41,24 @@ class OpenAISearchModel:
             "날짜가 없으면 any, 오늘/내일/이번 주말/다음 주말은 각각 대응하는 dateMode를 사용한다. "
             "range는 명확한 날짜만 YYYY-MM-DD로 startDate/endDate에 넣고 끝 날짜는 포함한다. "
             "날짜를 추측하지 않는다. 주말은 토/일이며 이번 주는 월요일 시작. "
-            "반경이 명시된 경우에만 radiusMeters를 설정한다. 다른 지역/시간대 또는 시간대 조건(예: 오후), "
-            "일정 충돌 확인, 생성/참여 요청처럼 아직 지원하지 않는 조건은 clarification에 짧은 한국어 "
-            "확인 질문을 넣는다. 명시한 조건을 조용히 버리지 않는다. clarification이 없으면 null. "
-            "위치 좌표는 입력으로 주어진 검색 중심을 사용하며 지역을 임의로 추정하지 않는다.",
+            "시간이 없으면 timeMode=any. 오전은 morning(06:00 이상 12:00 미만), 오후는 "
+            "afternoon(12:00 이상 18:00 미만), 저녁은 evening(18:00 이후)이다. 명확한 시각 또는 "
+            "시간 범위는 timeMode=range와 HH:MM 형식의 startTime/endTime을 사용한다. '오후 3시'처럼 "
+            "한 시각만 지정하면 1시간 범위로 해석한다. 이후/이전 조건은 한쪽 시간만 설정한다. "
+            "반경이 명시된 경우에만 radiusMeters를 설정한다. 이 서비스는 단일 요청형 검색이다. "
+            "'초보자도 가능한' 같은 일반적인 선호 표현은 가장 자연스럽고 포괄적인 의미로 해석하고 "
+            "확인 질문을 만들지 않는다. 다른 지역, 일정 충돌 확인, 생성/참여 요청처럼 현재 검색으로 "
+            "처리할 수 없는 명시적 조건만 unsupportedReason에 짧은 한국어 안내문으로 넣는다. "
+            "지원되는 조건이나 단순한 의미 차이는 unsupportedReason으로 보내지 않는다. 처리할 수 없는 "
+            "조건을 조용히 버리지 않으며, unsupportedReason이 없으면 null. "
+            "hasLocation=true이면 앱이 검색 중심 좌표를 이미 제공한 것이다. '내 근처', '주변', "
+            "'가까운 곳'은 지원되는 표현이므로 위치 안내나 unsupportedReason을 반환하지 않는다. "
+            "위치 좌표는 앱이 제공한 검색 중심을 사용하며 지역을 임의로 추정하지 않는다.",
             {
                 "query": request.query,
                 "referenceTime": request.referenceTime.isoformat(),
                 "categories": categories,
+                "hasLocation": request.latitude is not None and request.longitude is not None,
             },
             Intent,
         )

@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -30,8 +30,11 @@ class Intent(Contract):
     dateMode: Literal["any", "today", "tomorrow", "this_weekend", "next_weekend", "range"]
     startDate: str | None
     endDate: str | None
+    timeMode: Literal["any", "morning", "afternoon", "evening", "range"]
+    startTime: str | None
+    endTime: str | None
     radiusMeters: int | None
-    clarification: str | None
+    unsupportedReason: str | None
 
 
 class Filters(Contract):
@@ -39,6 +42,8 @@ class Filters(Contract):
     category: str | None
     startsAt: datetime
     endsBefore: datetime
+    startsAtTime: time | None
+    endsBeforeTime: time | None
     latitude: float = Field(ge=-90, le=90)
     longitude: float = Field(ge=-180, le=180)
     radiusMeters: int = Field(ge=100, le=50000)
@@ -72,7 +77,7 @@ class Selection(Contract):
 
 
 class SearchResponse(Contract):
-    status: Literal["COMPLETED", "NO_RESULTS", "NEEDS_CLARIFICATION"]
+    status: Literal["COMPLETED", "NO_RESULTS", "INPUT_REQUIRED", "UNSUPPORTED"]
     message: str
     filters: Filters | None
     recommendations: list[Recommendation]

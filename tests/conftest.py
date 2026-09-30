@@ -24,8 +24,11 @@ def intent():
         dateMode="this_weekend",
         startDate=None,
         endDate=None,
+        timeMode="any",
+        startTime=None,
+        endTime=None,
         radiusMeters=None,
-        clarification=None,
+        unsupportedReason=None,
     )
 
 
