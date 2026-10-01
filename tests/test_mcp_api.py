@@ -7,7 +7,7 @@ from conftest import FakeModel
 from pydantic import SecretStr, ValidationError
 
 from meetple_ai.app import create_app
-from meetple_ai.backend import BackendClient, BackendUnavailable
+from meetple_ai.backend import BackendClient, BackendRejected
 from meetple_ai.contracts import (
     EvidenceGrounding,
     ModerationDecision,
@@ -143,7 +143,7 @@ async def test_backend_rejects_unauthorized_envelope_without_leaking_body():
         base_url="http://backend",
         transport=httpx.MockTransport(lambda request: httpx.Response(403, json={"secret": "must-not-leak"})),
     ) as client:
-        with pytest.raises(BackendUnavailable, match="모임 정보를 조회할 수 없습니다") as error:
+        with pytest.raises(BackendRejected, match="백엔드가 AI 서비스 요청을 거부했습니다") as error:
             await BackendClient(client, TOKEN, "test-embedding-model").categories(CAPABILITY)
         assert "must-not-leak" not in str(error.value)
 

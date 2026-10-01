@@ -24,6 +24,7 @@ from meetple_ai.graph import build_graph
 from meetple_ai.mcp_tools import build_mcp, connect_tools
 from meetple_ai.model import OpenAISearchModel
 from meetple_ai.moderation_graph import build_moderation_graph
+from meetple_ai.moderation_worker import ModerationAnalysisProcessor, ReportAnalysisKafkaWorker
 from meetple_ai.settings import Settings
 
 logger = logging.getLogger("meetple_ai")
@@ -51,16 +52,34 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
             settings.openai_embedding_model,
         )
     slots = asyncio.Semaphore(4)
+    moderation_worker = None
+    if settings.kafka_consumer_enabled and model is not None:
+        moderation_worker = ReportAnalysisKafkaWorker(
+            settings,
+            ModerationAnalysisProcessor(backend, model, slots),
+            backend,
+        )
 
     @asynccontextmanager
     async def lifespan(app):
-        async with mcp.session_manager.run():
-            yield
-        await backend_http.aclose()
-        if openai_client:
-            await openai_client.close()
+        worker_task = (
+            asyncio.create_task(moderation_worker.run(), name="report-analysis-consumer")
+            if moderation_worker
+            else None
+        )
+        try:
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            if moderation_worker and worker_task:
+                await moderation_worker.stop()
+                worker_task.cancel()
+                await asyncio.gather(worker_task, return_exceptions=True)
+            await backend_http.aclose()
+            if openai_client:
+                await openai_client.close()
 
-    app = FastAPI(title="Meetple AI Service", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="Meetple AI Service", version="0.3.0", lifespan=lifespan)
 
     @app.middleware("http")
     async def internal_auth(request: Request, call_next):
@@ -89,7 +108,11 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
 
     @app.get("/readyz")
     async def ready():
-        return JSONResponse({"ready": model is not None}, status_code=200 if model else 503)
+        worker_ready = not settings.kafka_consumer_enabled or (
+            moderation_worker is not None and moderation_worker.running
+        )
+        ready_now = model is not None and worker_ready
+        return JSONResponse({"ready": ready_now}, status_code=200 if ready_now else 503)
 
     @app.post("/v1/search", response_model=SearchResponse)
     async def search(body: SearchRequest, request: Request):

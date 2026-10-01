@@ -1,5 +1,6 @@
 from datetime import date, datetime, time
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -243,3 +244,28 @@ class ModerationAnalysisResponse(Contract):
     policyIds: list[int] = Field(min_length=1, max_length=10)
     confidence: float = Field(ge=0, le=1)
     recommendedAction: RecommendedAction
+
+    @field_validator("confidence")
+    @classmethod
+    def normalize_confidence_precision(cls, value: float) -> float:
+        return round(value, 4)
+
+
+class ReportAnalysisRequestedData(Contract):
+    reportId: int = Field(gt=0)
+
+
+class ReportAnalysisRequestedEnvelope(Contract):
+    eventId: UUID
+    eventType: Literal["REPORT_ANALYSIS_REQUESTED"]
+    schemaVersion: Literal[1]
+    occurredAt: datetime
+    aggregateType: Literal["report"]
+    aggregateId: str = Field(pattern=r"^[1-9][0-9]*$")
+    data: ReportAnalysisRequestedData
+
+    @model_validator(mode="after")
+    def validate_report_identity(self):
+        if int(self.aggregateId) != self.data.reportId:
+            raise ValueError("신고 이벤트 식별자가 일치하지 않습니다.")
+        return self
