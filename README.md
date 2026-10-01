@@ -44,12 +44,12 @@ Spring의 로그인·권한 검증, 모임 DB 조회와 최종 추천 재검증�
 - **FastAPI**: 내부 검색 요청, 상태 확인, MCP HTTP 경로 제공.
 - **LangGraph**: 검색 단계와 조건부 분기 관리. 빈 결과면 두 번째 모델 호출 생략.
 - **OpenAI Responses API / Structured Outputs**: 조건과 추천 결과를 Pydantic 스키마로 파싱. 자동 재시도 없음.
-- **OpenAI Embeddings API**: 의미 조건이 있는 `semanticQuery`를 1536차원 질문 벡터로 변환한다. 광범위한 검색은 호출을 생략한다.
+- **OpenAI Embeddings API**: 의미 조건이 있는 `semanticQuery`와 모임 검색 문서를 1536차원 벡터로 변환한다. 광범위한 검색은 질문 임베딩 호출을 생략한다.
 - **MCP Python SDK**: `list_categories`, `search_meetings` 읽기 도구 제공. 실제 Streamable HTTP 프로토콜로 호출한다.
 - **PostgreSQL/PostGIS**: 날짜·카테고리·반경·모집 여부와 차단 관계로 후보를 제한한다.
 - **근거 검증**: 추천 ID가 실제 후보에 있고 인용문이 제목/본문의 연속된 원문인지 Python과 Spring에서 확인한다. 원문 검증만으로 의미적 적합성까지 보장하지는 않는다.
 
-현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩과 `AI_OPENAI_EMBEDDING_MODEL` 식별자를 Spring 내부 검색 API로 함께 전달한다. Spring은 같은 모델로 저장된 모임 벡터만 pgvector 의미 검색에 사용한다. 모임 임베딩 갱신·백필, 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약과 Flutter 화면은 후속 범위다.
+현재 응답의 `retrievalMode=keyword`는 유지한다. AI 서버는 질문 임베딩과 `AI_OPENAI_EMBEDDING_MODEL` 식별자를 Spring 내부 검색 API로 함께 전달한다. `POST /v1/embeddings/meetings`는 Spring의 비동기 이벤트 소비자가 모임 문서를 임베딩할 때 사용한다. 기존 모임 백필, 자유로운 에이전트 도구 선택, 일정 충돌 확인, 채팅 요약과 Flutter 화면은 후속 범위다.
 
 ## 검색 정책
 
@@ -152,7 +152,7 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 ## 인증과 운영 경계
 
 - 사용자 JWT는 Python이나 모델에 전달하지 않는다. Spring이 회원 ID·용도·90초 만료를 HMAC으로 서명한 검색 전용 권한을 만든다.
-- 내부 API는 공유 서비스 키와 서명을 모두 검증한다. 회원 ID를 모델/도구 인자로 받지 않는다. 서명 키는 Python에 전달하지 않는다.
+- 검색 API는 공유 서비스 키와 단기 서명을 모두 검증한다. 비동기 모임 임베딩 API는 사용자 요청과 분리되어 공유 서비스 키만 검증한다. 회원 ID를 모델/도구 인자로 받지 않으며 서명 키는 Python에 전달하지 않는다.
 - Spring의 `/internal/ai/search/categories`, `/internal/ai/search/meetings`만 JWT 검사 대신 위 인증을 사용한다. Python, MCP와 내부 경로는 사설 네트워크에서 연결하고 공개 ingress에서는 차단해야 한다.
 - 로그아웃 직전에 발급된 검색 권한은 최대 90초 유효할 수 있다. 조회에서는 탈퇴 회원과 차단한 모임장을 제외하며 최종 추천 직전에 다시 조회한다.
 - DB 조회 중에만 DB 연결을 사용한다. LLM 응답을 기다리는 동안 Spring 트랜잭션을 유지하지 않는다.

@@ -89,6 +89,31 @@ async def test_internal_api_and_mcp_reject_missing_service_auth(request_data):
         assert (await client.get("/readyz")).status_code == 503
 
 
+async def test_meeting_embedding_endpoint_requires_only_service_token(intent):
+    settings = Settings(
+        service_token=SecretStr(TOKEN),
+        openai_embedding_model="test-embedding-model",
+        _env_file=None,
+    )
+    model = FakeModel(intent)
+    app = create_app(settings, model=model)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://127.0.0.1"
+    ) as client:
+        denied = await client.post("/v1/embeddings/meetings", json={"document": "제목: 초보 러닝"})
+        response = await client.post(
+            "/v1/embeddings/meetings",
+            json={"document": "제목: 초보 러닝"},
+            headers={"X-AI-Service-Token": TOKEN},
+        )
+
+    assert denied.status_code == 403
+    assert response.status_code == 200
+    assert response.json()["embeddingModel"] == "test-embedding-model"
+    assert len(response.json()["embedding"]) == 1536
+    assert model.calls == [("embed", "제목: 초보 러닝")]
+
+
 async def test_backend_rejects_unauthorized_envelope_without_leaking_body():
     async with httpx.AsyncClient(
         base_url="http://backend",

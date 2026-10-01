@@ -90,3 +90,12 @@ class SearchResponse(Contract):
     filters: Filters | None
     recommendations: list[Recommendation]
     retrievalMode: Literal["keyword"] = "keyword"
+
+
+class MeetingEmbeddingRequest(Contract):
+    document: str = Field(min_length=1, max_length=3000)
+
+
+class MeetingEmbeddingResponse(Contract):
+    embeddingModel: str = Field(min_length=1, max_length=100)
+    embedding: list[float] = Field(min_length=1536, max_length=1536)

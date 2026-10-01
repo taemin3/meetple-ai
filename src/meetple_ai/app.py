@@ -12,7 +12,12 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 from meetple_ai.backend import BackendClient
-from meetple_ai.contracts import SearchRequest, SearchResponse
+from meetple_ai.contracts import (
+    MeetingEmbeddingRequest,
+    MeetingEmbeddingResponse,
+    SearchRequest,
+    SearchResponse,
+)
 from meetple_ai.graph import build_graph
 from meetple_ai.mcp_tools import build_mcp, connect_tools
 from meetple_ai.model import OpenAISearchModel
@@ -64,7 +69,7 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
         if (
             len(expected) < 32
             or not secrets.compare_digest(expected.encode(), supplied.encode())
-            or not 1 <= len(capability) <= 300
+            or (request.url.path != "/v1/embeddings/meetings" and not 1 <= len(capability) <= 300)
         ):
             return JSONResponse({"message": "내부 검색 권한이 필요합니다."}, status_code=403)
         return await call_next(request)
@@ -109,6 +114,32 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
             # 인증값, 질문, 문서, 공급자 오류 본문을 로그에 포함하지 않는다.
             logger.warning("search_failed request_id=%s error_type=%s", request_id, type(exc).__name__)
             return JSONResponse({"message": "AI 검색을 완료하지 못했습니다."}, status_code=503)
+
+    @app.post("/v1/embeddings/meetings", response_model=MeetingEmbeddingResponse)
+    async def embed_meeting(body: MeetingEmbeddingRequest):
+        if model is None:
+            return JSONResponse({"message": "AI 모델 설정이 필요합니다."}, status_code=503)
+        request_id, started = uuid4().hex, monotonic()
+        try:
+            async with asyncio.timeout(20):
+                async with slots:
+                    embedding = await model.embed(body.document)
+            logger.info(
+                "meeting_embedding_complete request_id=%s duration_ms=%d",
+                request_id,
+                round((monotonic() - started) * 1000),
+            )
+            return MeetingEmbeddingResponse(
+                embeddingModel=settings.openai_embedding_model,
+                embedding=embedding,
+            )
+        except Exception as exc:
+            logger.warning(
+                "meeting_embedding_failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            return JSONResponse({"message": "모임 임베딩을 생성하지 못했습니다."}, status_code=503)
 
     app.mount("/mcp", mcp.streamable_http_app())
     return app
