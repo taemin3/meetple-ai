@@ -12,10 +12,18 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 
 from meetple_ai.backend import BackendClient
-from meetple_ai.contracts import SearchRequest, SearchResponse
+from meetple_ai.contracts import (
+    ModerationAnalysisRequest,
+    ModerationAnalysisResponse,
+    PolicyEmbeddingSyncRequest,
+    PolicyEmbeddingSyncResponse,
+    SearchRequest,
+    SearchResponse,
+)
 from meetple_ai.graph import build_graph
 from meetple_ai.mcp_tools import build_mcp, connect_tools
 from meetple_ai.model import OpenAISearchModel
+from meetple_ai.moderation_graph import build_moderation_graph
 from meetple_ai.settings import Settings
 
 logger = logging.getLogger("meetple_ai")
@@ -52,7 +60,7 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
         if openai_client:
             await openai_client.close()
 
-    app = FastAPI(title="Meetple AI Search", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Meetple AI Service", version="0.2.0", lifespan=lifespan)
 
     @app.middleware("http")
     async def internal_auth(request: Request, call_next):
@@ -61,18 +69,19 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
         expected = settings.service_token.get_secret_value()
         supplied = request.headers.get("X-AI-Service-Token", "")
         capability = request.headers.get("X-Meetple-Capability", "")
+        capability_required = request.url.path == "/v1/search" or request.url.path.startswith("/mcp")
         if (
             len(expected) < 32
             or not secrets.compare_digest(expected.encode(), supplied.encode())
-            or not 1 <= len(capability) <= 300
+            or (capability_required and not 1 <= len(capability) <= 300)
         ):
-            return JSONResponse({"message": "내부 검색 권한이 필요합니다."}, status_code=403)
+            return JSONResponse({"message": "내부 AI 서비스 권한이 필요합니다."}, status_code=403)
         return await call_next(request)
 
     @app.exception_handler(RequestValidationError)
     async def validation_error(request, exc):
         # FastAPI 기본 검증 오류는 원본 입력을 포함하므로 반환하지 않는다.
-        return JSONResponse({"message": "검색 입력이 올바르지 않습니다."}, status_code=422)
+        return JSONResponse({"message": "AI 요청 입력이 올바르지 않습니다."}, status_code=422)
 
     @app.get("/healthz")
     async def health():
@@ -109,6 +118,71 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
             # 인증값, 질문, 문서, 공급자 오류 본문을 로그에 포함하지 않는다.
             logger.warning("search_failed request_id=%s error_type=%s", request_id, type(exc).__name__)
             return JSONResponse({"message": "AI 검색을 완료하지 못했습니다."}, status_code=503)
+
+    @app.post("/v1/moderation/analyze", response_model=ModerationAnalysisResponse)
+    async def analyze_moderation(body: ModerationAnalysisRequest):
+        if model is None:
+            return JSONResponse({"message": "AI 모델 설정이 필요합니다."}, status_code=503)
+        request_id, started = uuid4().hex, monotonic()
+        try:
+            async with asyncio.timeout(45):
+                async with slots:
+                    result = await build_moderation_graph(model, backend).ainvoke(
+                        {"request": body}, {"recursion_limit": 12}
+                    )
+            logger.info(
+                "moderation_complete request_id=%s duration_ms=%d status=COMPLETED",
+                request_id,
+                round((monotonic() - started) * 1000),
+            )
+            return result["response"]
+        except Exception as exc:
+            # 신고 원문, 증거, 정책 원문, 인증값과 공급자 오류 본문은 로그에 포함하지 않는다.
+            logger.warning(
+                "moderation_failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            return JSONResponse({"message": "AI 신고 분석을 완료하지 못했습니다."}, status_code=503)
+
+    @app.post(
+        "/v1/moderation/policies/embeddings/sync",
+        response_model=PolicyEmbeddingSyncResponse,
+    )
+    async def sync_policy_embeddings(body: PolicyEmbeddingSyncRequest):
+        if model is None:
+            return JSONResponse({"message": "AI 모델 설정이 필요합니다."}, status_code=503)
+        request_id, started = uuid4().hex, monotonic()
+        try:
+            async with asyncio.timeout(45):
+                async with slots:
+                    jobs = await backend.policy_embedding_jobs(body.limit)
+                    if jobs.items:
+                        embeddings = await model.embed_many([job.content for job in jobs.items])
+                        for job, embedding in zip(jobs.items, embeddings, strict=True):
+                            await backend.upsert_policy_embedding(job, embedding)
+            logger.info(
+                "policy_embedding_sync_complete request_id=%s duration_ms=%d count=%d",
+                request_id,
+                round((monotonic() - started) * 1000),
+                len(jobs.items),
+            )
+            return PolicyEmbeddingSyncResponse(
+                requestedCount=len(jobs.items),
+                embeddedCount=len(jobs.items),
+                embeddingModel=settings.openai_embedding_model,
+            )
+        except Exception as exc:
+            # 정책 원문, 임베딩, 인증값과 공급자 오류 본문은 로그에 포함하지 않는다.
+            logger.warning(
+                "policy_embedding_sync_failed request_id=%s error_type=%s",
+                request_id,
+                type(exc).__name__,
+            )
+            return JSONResponse(
+                {"message": "운영 정책 임베딩 동기화를 완료하지 못했습니다."},
+                status_code=503,
+            )
 
     app.mount("/mcp", mcp.streamable_http_app())
     return app

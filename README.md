@@ -1,6 +1,6 @@
-# Meetple AI 모임 검색
+# Meetple AI 서비스
 
-사용자의 자연어에서 조건을 추출하고, 실제 모집 중인 모임을 조회한 다음 소개글의 원문 근거를 반환하는 Python AI 서버다. 코드·의존성·테스트·Docker 이미지·CI를 이 저장소에서 독립적으로 관리한다.
+자연어 모임 검색과 운영 정책에 근거한 신고 분석을 제공하는 Python AI 서버다. 코드·의존성·테스트·Docker 이미지·CI를 이 저장소에서 독립적으로 관리한다.
 
 ## 저장소와 폴더
 
@@ -84,11 +84,11 @@ Copy-Item .env.example .env
 | `AI_SERVICE_TOKEN` | Spring과 공유하는 임의의 32자 이상 키 |
 | `AI_OPENAI_API_KEY` | OpenAI API 키 |
 | `AI_OPENAI_MODEL` | 계정에서 사용 가능한 Responses + Structured Outputs 지원 모델 ID |
-| `AI_OPENAI_EMBEDDING_MODEL` | `vector(1536)`과 맞는 임베딩 모델 ID. 예: `text-embedding-3-small` |
+| `AI_OPENAI_EMBEDDING_MODEL` | `vector(1536)`과 맞는 고정 모델 `text-embedding-3-small` |
 | `AI_BACKEND_URL` | 기본 `http://127.0.0.1:8080` |
 | `AI_MCP_URL` | 기본 `http://127.0.0.1:8001/mcp/` |
 
-생성 모델 ID에는 기본값이 없으며 환경변수로 지정한다. 임베딩 모델 예시는 `text-embedding-3-small`이지만 계정의 모델 접근 권한과 실제 응답 품질은 직접 호출해 확인해야 한다.
+생성 모델 ID에는 기본값이 없으며 환경변수로 지정한다. 임베딩 모델은 Spring의 저장 벡터와 같은 `text-embedding-3-small`만 허용한다. 계정의 모델 접근 권한과 실제 응답 품질은 직접 호출해 확인해야 한다.
 
 ```powershell
 .venv\Scripts\python -m uvicorn meetple_ai.app:app --host 127.0.0.1 --port 8001
@@ -159,6 +159,40 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 - Python 프로세스당 동시 검색 4개, 대기 포함 전체 35초, 모델 호출당 12초. 사용자별/분산 요청 제한과 비용 한도는 아직 없으므로 운영 활성화 전에 추가해야 한다.
 - OpenAI에는 질문·기준 시각·카테고리·위치 제공 여부와 후보 제목/설명/일시/거리만 전송한다. 의미 조건이 있으면 모델이 만든 `semanticQuery`도 임베딩 API에 전달한다. 실제 좌표·회원 정보·인증 헤더는 모델 입력에서 제외한다. 설명은 후보당 1,800자로 제한한다.
 - 모델 호출에는 `store=false`를 지정한다. 외부 공급자의 모든 데이터 보관 정책을 제어한다는 뜻은 아니다. 실제 사용자 데이터로 출시하기 전 개인정보 안내를 검토해야 한다.
+
+## 신고 분석 내부 API
+
+`POST /v1/moderation/analyze`는 Spring 전용 서비스 키를 요구한다. 사용자 JWT나 모임 검색용 capability는 전달하지 않는다.
+
+```json
+{
+  "reportId": 77,
+  "targetType": "CHAT_MESSAGE",
+  "reason": "ABUSE_OR_HARASSMENT",
+  "description": null,
+  "evidence": [
+    {
+      "evidenceId": 501,
+      "evidenceType": "CHAT_MESSAGE",
+      "content": "검증할 신고 증거 원문"
+    }
+  ]
+}
+```
+
+처리 흐름은 다음과 같다.
+
+```text
+입력 검증 → 신고 요약·정책 검색 문장 생성 → text-embedding-3-small 임베딩
+→ Spring 운영 정책 검색 API → 구조화된 신고 분류 → 증거·정책 ID와 원문 인용 검증
+→ 검증된 ID만 분석 결과로 반환
+```
+
+응답에는 신고 유형, 위험도, 우선순위, 요약, 판단 근거, 검증된 증거·정책 ID, 확신도와 관리자용 추천 제재가 포함된다. LLM에는 조회나 제재 도구를 제공하지 않으며, 추천만 생성한다. 실제 결과 저장, 자동 경고 조건 평가, 정지·삭제 같은 제재 실행은 Spring의 후속 단계다.
+
+현재 엔드포인트는 HTTP 계약과 분석 그래프를 검증하기 위한 내부 처리 경계다. Kafka 이벤트 소비, 신고 문맥 조회, Spring 결과 콜백과 Retry/DLQ는 backend 연동 PR에서 구현한다.
+
+`POST /v1/moderation/policies/embeddings/sync`는 누락되거나 정책 원문 변경으로 stale 상태가 된 조항을 Spring에서 최대 100개 조회한다. 조항 원문을 한 번의 Embeddings API 배치 요청으로 변환한 뒤 `contentHash`가 여전히 일치하는 조항만 Spring에 저장한다. 호출 자체를 예약하는 스케줄러와 운영 정책 데이터 입력은 아직 포함하지 않는다.
 - 앱 로그에는 질문·후보 본문·인증값 대신 임의 요청 ID, 시간, 결과 상태를 기록한다. 프록시/APM의 별도 본문 로깅도 확인해야 한다.
 
 ## 테스트와 평가

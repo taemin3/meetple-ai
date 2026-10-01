@@ -1,6 +1,14 @@
 import httpx
 
-from meetple_ai.contracts import Candidates, Filters
+from meetple_ai.contracts import (
+    Candidates,
+    Filters,
+    ModerationAnalysisRequest,
+    PolicyCandidates,
+    PolicyEmbeddingJob,
+    PolicyEmbeddingJobs,
+    PolicySearchPlan,
+)
 
 
 class BackendUnavailable(Exception):
@@ -13,20 +21,24 @@ class BackendClient:
         self.service_token = service_token
         self.embedding_model = embedding_model
 
-    async def _request(self, method: str, path: str, capability: str, body=None):
+    async def _request(self, method: str, path: str, capability: str | None = None, body=None, params=None):
+        headers = {"X-AI-Service-Token": self.service_token}
+        if capability is not None:
+            headers["X-Meetple-Capability"] = capability
         try:
             response = await self.client.request(
                 method,
                 path,
                 json=body,
-                headers={"X-AI-Service-Token": self.service_token, "X-Meetple-Capability": capability},
+                params=params,
+                headers=headers,
             )
             response.raise_for_status()
             envelope = response.json()
-            if envelope.get("success") is not True:
+            if not isinstance(envelope, dict) or envelope.get("success") is not True:
                 raise ValueError("Invalid envelope")
-            return envelope["data"]
-        except (httpx.HTTPError, KeyError, ValueError) as exc:
+            return envelope.get("data")
+        except (httpx.HTTPError, ValueError) as exc:
             raise BackendUnavailable("모임 정보를 조회할 수 없습니다.") from exc
 
     async def categories(self, capability: str) -> list[str]:
@@ -43,3 +55,49 @@ class BackendClient:
         body["queryEmbeddingModel"] = self.embedding_model if query_embedding is not None else None
         data = await self._request("POST", "/internal/ai/search/meetings", capability, body)
         return Candidates.model_validate(data)
+
+    async def search_policies(
+        self,
+        request: ModerationAnalysisRequest,
+        plan: PolicySearchPlan,
+        query_embedding: list[float],
+    ) -> PolicyCandidates:
+        body = {
+            "keyword": plan.keyword,
+            "targetType": request.targetType,
+            "policyType": plan.policyType,
+            "queryEmbedding": query_embedding,
+            "queryEmbeddingModel": self.embedding_model,
+            "limit": 10,
+        }
+        try:
+            data = await self._request("POST", "/internal/ai/moderation/policies/search", body=body)
+            return PolicyCandidates.model_validate(data)
+        except (BackendUnavailable, ValueError) as exc:
+            raise BackendUnavailable("운영 정책을 조회할 수 없습니다.") from exc
+
+    async def policy_embedding_jobs(self, limit: int) -> PolicyEmbeddingJobs:
+        try:
+            data = await self._request(
+                "GET",
+                "/internal/ai/moderation/policies/embedding-jobs",
+                params={"embeddingModel": self.embedding_model, "limit": limit},
+            )
+            return PolicyEmbeddingJobs.model_validate(data)
+        except (BackendUnavailable, ValueError) as exc:
+            raise BackendUnavailable("운영 정책 임베딩 작업을 조회할 수 없습니다.") from exc
+
+    async def upsert_policy_embedding(self, job: PolicyEmbeddingJob, embedding: list[float]) -> None:
+        body = {
+            "embeddingModel": self.embedding_model,
+            "contentHash": job.contentHash,
+            "embedding": embedding,
+        }
+        try:
+            await self._request(
+                "PUT",
+                f"/internal/ai/moderation/policies/chunks/{job.policyChunkId}/embedding",
+                body=body,
+            )
+        except BackendUnavailable as exc:
+            raise BackendUnavailable("운영 정책 임베딩을 저장할 수 없습니다.") from exc
