@@ -5,8 +5,17 @@ from uuid import uuid4
 import httpx
 import pytest
 
-from meetple_ai.backend import BackendClient, BackendRejected, BackendUnavailable
-from meetple_ai.contracts import ModerationAnalysisResponse
+from meetple_ai.backend import (
+    BackendClient,
+    BackendContractInvalid,
+    BackendRejected,
+    BackendUnavailable,
+)
+from meetple_ai.contracts import (
+    ModerationAnalysisRequest,
+    ModerationAnalysisResponse,
+    PolicySearchPlan,
+)
 from meetple_ai.model import ModelOutputError
 from meetple_ai.moderation_worker import (
     FAILURE_CODE_HEADER,
@@ -52,18 +61,23 @@ class RejectedFailureBackend(FakeBackend):
         raise BackendRejected("rejected", self.status_code)
 
 
-def worker(processor=None, backend=None):
+class UnavailableFailureBackend(FakeBackend):
+    async def fail_moderation(self, report_id, *, retryable, failure_code):
+        raise BackendUnavailable("backend down")
+
+
+def worker(processor=None, backend=None, *, retry_delays=(0, 0, 0, 0), now_ms=lambda: 0):
     settings = Settings(
         kafka_consumer_enabled=True,
-        kafka_retry_delays_seconds=(0, 0, 0, 0),
-        kafka_max_poll_interval_ms=60_000,
+        kafka_retry_delays_seconds=retry_delays,
+        kafka_max_poll_interval_ms=(max(retry_delays) + 60) * 1000,
         _env_file=None,
     )
     return ReportAnalysisKafkaWorker(
         settings,
         processor or FakeProcessor(),
         backend or FakeBackend(),
-        now_ms=lambda: 0,
+        now_ms=now_ms,
     )
 
 
@@ -116,6 +130,16 @@ async def test_transient_failure_moves_message_to_first_retry_topic():
 
 
 @pytest.mark.asyncio
+async def test_failure_callback_outage_does_not_block_retry_publish():
+    processor = FakeProcessor(BackendUnavailable("backend down"))
+    producer = FakeProducer()
+
+    await worker(processor, UnavailableFailureBackend()).handle(message(), producer)
+
+    assert producer.sent[0][0] == "meetple.moderation.report-analysis.v1.retry-0"
+
+
+@pytest.mark.asyncio
 async def test_last_retry_failure_moves_message_to_dlq_and_becomes_permanent():
     processor = FakeProcessor(ModelOutputError("invalid output"))
     backend, producer = FakeBackend(), FakeProducer()
@@ -152,6 +176,31 @@ async def test_retry_without_due_header_becomes_permanent_and_moves_to_dlq():
     assert backend.failures == [(10, False, "INVALID_RETRY_METADATA")]
     assert producer.sent[0][0] == "meetple.moderation.report-analysis.v1.dlq"
     assert dict(producer.sent[0][1]["headers"])[FAILURE_CODE_HEADER] == b"INVALID_RETRY_METADATA"
+
+
+@pytest.mark.asyncio
+async def test_retry_timestamp_beyond_configured_delay_moves_to_dlq():
+    backend, producer = FakeBackend(), FakeProducer()
+    retry_message = message(
+        topic="meetple.moderation.report-analysis.v1.retry-0",
+        headers=[(RETRY_AT_HEADER, b"10001")],
+    )
+
+    await worker(backend=backend, retry_delays=(5, 30, 120, 600)).handle(retry_message, producer)
+
+    assert backend.failures == [(10, False, "INVALID_RETRY_METADATA")]
+    assert producer.sent[0][0] == "meetple.moderation.report-analysis.v1.dlq"
+
+
+@pytest.mark.asyncio
+async def test_backend_contract_failure_is_permanent_without_retrying_analysis():
+    processor = FakeProcessor(BackendContractInvalid("invalid policy response"))
+    backend, producer = FakeBackend(), FakeProducer()
+
+    await worker(processor, backend).handle(message(), producer)
+
+    assert backend.failures == [(10, False, "BACKEND_CONTRACT_INVALID")]
+    assert producer.sent[0][0] == "meetple.moderation.report-analysis.v1.dlq"
 
 
 @pytest.mark.asyncio
@@ -242,3 +291,72 @@ async def test_backend_context_and_callbacks_match_spring_contract():
         "/internal/ai/moderation/reports/10/analysis/failure",
         {"retryable": True, "failureCode": "ANALYSIS_TIMEOUT"},
     )
+
+
+@pytest.mark.asyncio
+async def test_backend_rejects_mismatched_context_report_id():
+    async def handle(request):
+        return httpx.Response(
+            200,
+            json={
+                "success": True,
+                "data": {
+                    "reportId": 11,
+                    "targetType": "CHAT_MESSAGE",
+                    "reason": "SPAM",
+                    "description": None,
+                    "evidence": [
+                        {
+                            "evidenceId": 10,
+                            "evidenceType": "CHAT_MESSAGE",
+                            "content": "반복 광고",
+                        }
+                    ],
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(
+        base_url="http://backend",
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        backend = BackendClient(client, "service-token", "text-embedding-3-small")
+        with pytest.raises(BackendContractInvalid, match="식별자가 일치하지 않습니다"):
+            await backend.moderation_context(10)
+
+
+@pytest.mark.asyncio
+async def test_backend_preserves_invalid_policy_response_as_contract_failure():
+    async def handle(request):
+        return httpx.Response(
+            200,
+            json={"success": True, "data": {"items": [{"policyId": 1}], "hasMore": False}},
+        )
+
+    request = ModerationAnalysisRequest(
+        reportId=10,
+        targetType="CHAT_MESSAGE",
+        reason="SPAM",
+        evidence=[{"evidenceId": 10, "evidenceType": "CHAT_MESSAGE", "content": "반복 광고"}],
+    )
+    plan = PolicySearchPlan(summary="광고 신고", keyword="광고", semanticQuery="반복 광고")
+    async with httpx.AsyncClient(
+        base_url="http://backend",
+        transport=httpx.MockTransport(handle),
+    ) as client:
+        backend = BackendClient(client, "service-token", "text-embedding-3-small")
+        with pytest.raises(BackendContractInvalid, match="운영 정책 응답이 올바르지 않습니다"):
+            await backend.search_policies(request, plan, [0.0] * 1536)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code", [408, 429])
+async def test_backend_treats_timeout_and_rate_limit_as_transient(status_code):
+    async with httpx.AsyncClient(
+        base_url="http://backend",
+        transport=httpx.MockTransport(lambda request: httpx.Response(status_code)),
+    ) as client:
+        backend = BackendClient(client, "service-token", "text-embedding-3-small")
+        with pytest.raises(BackendUnavailable) as error:
+            await backend.moderation_context(10)
+        assert not isinstance(error.value, BackendRejected)

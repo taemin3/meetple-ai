@@ -1,4 +1,5 @@
 import httpx
+from pydantic import ValidationError
 
 from meetple_ai.contracts import (
     Candidates,
@@ -13,6 +14,10 @@ from meetple_ai.contracts import (
 
 
 class BackendUnavailable(Exception):
+    pass
+
+
+class BackendContractInvalid(Exception):
     pass
 
 
@@ -46,19 +51,23 @@ class BackendClient:
                 raise ValueError("Invalid envelope")
             return envelope.get("data")
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code in {408, 429}:
+                raise BackendUnavailable("백엔드가 일시적으로 요청을 처리할 수 없습니다.") from exc
             if 400 <= exc.response.status_code < 500:
                 raise BackendRejected(
                     "백엔드가 AI 서비스 요청을 거부했습니다.",
                     exc.response.status_code,
                 ) from exc
             raise BackendUnavailable("모임 정보를 조회할 수 없습니다.") from exc
-        except (httpx.HTTPError, ValueError) as exc:
+        except httpx.HTTPError as exc:
             raise BackendUnavailable("모임 정보를 조회할 수 없습니다.") from exc
+        except ValueError as exc:
+            raise BackendContractInvalid("백엔드 응답 형식이 올바르지 않습니다.") from exc
 
     async def categories(self, capability: str) -> list[str]:
         data = await self._request("GET", "/internal/ai/search/categories", capability)
         if not isinstance(data, list) or not all(isinstance(value, str) for value in data):
-            raise BackendUnavailable("카테고리 응답이 올바르지 않습니다.")
+            raise BackendContractInvalid("카테고리 응답이 올바르지 않습니다.")
         return data
 
     async def search(
@@ -88,10 +97,14 @@ class BackendClient:
         try:
             data = await self._request("POST", "/internal/ai/moderation/policies/search", body=body)
             return PolicyCandidates.model_validate(data)
+        except BackendContractInvalid:
+            raise
         except BackendRejected:
             raise
-        except (BackendUnavailable, ValueError) as exc:
+        except BackendUnavailable as exc:
             raise BackendUnavailable("운영 정책을 조회할 수 없습니다.") from exc
+        except ValidationError as exc:
+            raise BackendContractInvalid("운영 정책 응답이 올바르지 않습니다.") from exc
 
     async def policy_embedding_jobs(self, limit: int) -> PolicyEmbeddingJobs:
         try:
@@ -125,9 +138,12 @@ class BackendClient:
                 "GET",
                 f"/internal/ai/moderation/reports/{report_id}/context",
             )
-            return ModerationAnalysisRequest.model_validate(data)
-        except ValueError as exc:
-            raise BackendRejected("신고 분석 문맥 응답이 올바르지 않습니다.", 422) from exc
+            context = ModerationAnalysisRequest.model_validate(data)
+            if context.reportId != report_id:
+                raise BackendContractInvalid("신고 분석 문맥의 식별자가 일치하지 않습니다.")
+            return context
+        except ValidationError as exc:
+            raise BackendContractInvalid("신고 분석 문맥 응답이 올바르지 않습니다.") from exc
 
     async def complete_moderation(self, result: ModerationAnalysisResponse) -> None:
         body = result.model_dump(mode="json", exclude={"reportId"})

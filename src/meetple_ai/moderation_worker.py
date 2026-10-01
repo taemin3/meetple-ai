@@ -9,7 +9,7 @@ from aiokafka import AIOKafkaConsumer, AIOKafkaProducer
 from aiokafka.structs import TopicPartition
 from pydantic import ValidationError
 
-from meetple_ai.backend import BackendRejected, BackendUnavailable
+from meetple_ai.backend import BackendContractInvalid, BackendRejected, BackendUnavailable
 from meetple_ai.contracts import ReportAnalysisRequestedEnvelope
 from meetple_ai.model import ModelOutputError
 from meetple_ai.moderation_graph import build_moderation_graph
@@ -20,6 +20,7 @@ logger = logging.getLogger("meetple_ai.moderation_worker")
 RETRY_AT_HEADER = "meetpleRetryAtEpochMs"
 FAILURE_CODE_HEADER = "meetpleFailureCode"
 ORIGINAL_TOPIC_HEADER = "meetpleOriginalTopic"
+RETRY_CLOCK_SKEW_SECONDS = 5
 
 
 class InvalidModerationEvent(Exception):
@@ -161,7 +162,7 @@ class ReportAnalysisKafkaWorker:
 
         if attempt >= 0:
             try:
-                await self._wait_for_retry(message.headers)
+                await self._wait_for_retry(message.topic, message.headers)
             except InvalidModerationEvent:
                 notified = await self._notify_failure(
                     envelope.data.reportId,
@@ -216,8 +217,12 @@ class ReportAnalysisKafkaWorker:
                 return attempt
         raise InvalidModerationEvent("신고 분석 토픽이 올바르지 않습니다.")
 
-    async def _wait_for_retry(self, headers: list[tuple[str, bytes]] | None) -> None:
-        wait_seconds = self._retry_wait_seconds("retry", headers, validate_topic=False)
+    async def _wait_for_retry(
+        self,
+        topic: str,
+        headers: list[tuple[str, bytes]] | None,
+    ) -> None:
+        wait_seconds = self._retry_wait_seconds(topic, headers)
         if wait_seconds:
             await self.sleep(wait_seconds)
 
@@ -225,17 +230,22 @@ class ReportAnalysisKafkaWorker:
         self,
         topic: str,
         headers: list[tuple[str, bytes]] | None,
-        *,
-        validate_topic: bool = True,
     ) -> float:
-        if validate_topic and self._attempt_for_topic(topic) < 0:
+        attempt = self._attempt_for_topic(topic)
+        if attempt < 0:
             return 0
         retry_at_value = self._last_header(headers, RETRY_AT_HEADER)
         try:
             retry_at = int(retry_at_value.decode("ascii"))
         except (AttributeError, UnicodeDecodeError, ValueError) as exc:
             raise InvalidModerationEvent("Retry 시각이 올바르지 않습니다.") from exc
-        return max(0, retry_at - self.now_ms()) / 1000
+        remaining_ms = retry_at - self.now_ms()
+        max_remaining_ms = (
+            self.settings.kafka_retry_delays_seconds[attempt] + RETRY_CLOCK_SKEW_SECONDS
+        ) * 1000
+        if retry_at < 0 or remaining_ms > max_remaining_ms:
+            raise InvalidModerationEvent("Retry 시각이 허용 범위를 벗어났습니다.")
+        return max(0, remaining_ms) / 1000
 
     async def _resume_partition(self, consumer: Any, partition: TopicPartition, delay: float) -> None:
         await self.sleep(delay)
@@ -264,6 +274,15 @@ class ReportAnalysisKafkaWorker:
                 # 저장할 분석이 없어도 원본 이벤트는 DLQ에서 확인할 수 있게 한다.
                 return True
             raise
+        except (BackendUnavailable, BackendContractInvalid) as exc:
+            # 상태 callback 장애가 원본 이벤트의 Retry/DLQ 이동을 막지 않게 한다.
+            logger.warning(
+                "moderation_failure_callback_failed report_id=%d failure_code=%s error_type=%s",
+                report_id,
+                failure_code,
+                type(exc).__name__,
+            )
+            return True
 
     async def _publish_retry(
         self,
@@ -312,6 +331,8 @@ class ReportAnalysisKafkaWorker:
         return headers
 
     def _classify_failure(self, exc: Exception) -> tuple[bool, str]:
+        if isinstance(exc, BackendContractInvalid):
+            return False, "BACKEND_CONTRACT_INVALID"
         if isinstance(exc, BackendRejected):
             return False, "BACKEND_REJECTED"
         if isinstance(exc, ValidationError):
