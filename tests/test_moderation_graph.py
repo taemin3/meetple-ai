@@ -11,7 +11,7 @@ from meetple_ai.contracts import (
     PolicySearchPlan,
 )
 from meetple_ai.model import ModelOutputError
-from meetple_ai.moderation_graph import build_moderation_graph
+from meetple_ai.moderation_graph import build_moderation_graph, normalize_recommended_action
 
 
 def request_fixture():
@@ -76,7 +76,6 @@ class FakeModerationModel:
             summary="채팅에서 상대방을 반복적으로 모욕했다는 신고입니다.",
             keyword="반복 모욕",
             semanticQuery="채팅에서 상대방을 반복적으로 모욕하고 괴롭히는 행위",
-            policyType="ABUSE_OR_HARASSMENT",
         )
         self.decision = decision or decision_fixture()
         self.calls = []
@@ -164,12 +163,59 @@ async def test_moderation_graph_fails_closed_without_policy_candidates():
     assert all(call != ("analyze", []) for call in model.calls)
 
 
-async def test_force_delete_is_rejected_for_non_meeting_target():
-    decision = decision_fixture(recommendedAction="FORCE_DELETE_MEETING")
-    with pytest.raises(ModelOutputError, match="추천 제재"):
-        await build_moderation_graph(
-            FakeModerationModel(decision), FakePolicyTools([policy_fixture()])
-        ).ainvoke({"request": request_fixture()})
+async def test_force_delete_is_limited_to_manual_review_for_non_meeting_target():
+    decision = decision_fixture(riskLevel="HIGH", recommendedAction="FORCE_DELETE_MEETING")
+    result = await build_moderation_graph(
+        FakeModerationModel(decision), FakePolicyTools([policy_fixture()])
+    ).ainvoke({"request": request_fixture()})
+    assert result["response"].recommendedAction == "MANUAL_REVIEW"
+
+
+def test_all_risk_and_action_combinations_are_deterministically_limited():
+    allowed = {
+        "LOW": {"DISMISS", "WARNING", "MANUAL_REVIEW"},
+        "MEDIUM": {"WARNING", "SUSPEND_1_DAY", "SUSPEND_3_DAYS", "MANUAL_REVIEW"},
+        "HIGH": {
+            "SUSPEND_3_DAYS",
+            "SUSPEND_7_DAYS",
+            "PERMANENT_SUSPENSION",
+            "FORCE_DELETE_MEETING",
+            "MANUAL_REVIEW",
+        },
+        "CRITICAL": {
+            "SUSPEND_7_DAYS",
+            "PERMANENT_SUSPENSION",
+            "FORCE_DELETE_MEETING",
+            "MANUAL_REVIEW",
+        },
+    }
+    actions = {
+        "DISMISS",
+        "WARNING",
+        "SUSPEND_1_DAY",
+        "SUSPEND_3_DAYS",
+        "SUSPEND_7_DAYS",
+        "PERMANENT_SUSPENSION",
+        "FORCE_DELETE_MEETING",
+        "MANUAL_REVIEW",
+    }
+    for risk_level, allowed_actions in allowed.items():
+        for action in actions:
+            decision = decision_fixture(riskLevel=risk_level, recommendedAction=action)
+            actual = normalize_recommended_action(decision, "MEETING").recommendedAction
+            assert actual == (action if action in allowed_actions else "MANUAL_REVIEW")
+
+
+async def test_policy_quote_must_exist_in_exact_context_sent_to_model():
+    hidden_quote = "모델에 전달되지 않은 정책 근거"
+    policy = policy_fixture().model_copy(update={"content": "가" * 3000 + hidden_quote})
+    decision = decision_fixture(
+        policies=[PolicyGrounding(policyId=11, policyChunkId=101, policyQuote=hidden_quote)]
+    )
+    with pytest.raises(ModelOutputError, match="정책 근거"):
+        await build_moderation_graph(FakeModerationModel(decision), FakePolicyTools([policy])).ainvoke(
+            {"request": request_fixture()}
+        )
 
 
 def test_moderation_request_rejects_duplicate_or_excessive_evidence():

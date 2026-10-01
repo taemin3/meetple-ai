@@ -142,7 +142,6 @@ async def test_moderation_preparation_uses_structured_output_and_treats_evidence
         summary="반복적인 모욕 메시지 신고입니다.",
         keyword="반복 모욕",
         semanticQuery="채팅에서 상대방을 반복적으로 모욕하는 행위",
-        policyType="ABUSE_OR_HARASSMENT",
     )
 
     def respond(request):

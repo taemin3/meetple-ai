@@ -65,7 +65,8 @@ class BackendClient:
         body = {
             "keyword": plan.keyword,
             "targetType": request.targetType,
-            "policyType": plan.policyType,
+            # 초기 LLM 분류를 하드 필터로 신뢰하지 않고 모든 관련 유형을 검색한다.
+            "policyType": None,
             "queryEmbedding": query_embedding,
             "queryEmbeddingModel": self.embedding_model,
             "limit": 10,

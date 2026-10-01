@@ -3,6 +3,7 @@ from typing import Protocol, TypedDict
 from langgraph.graph import END, START, StateGraph
 
 from meetple_ai.contracts import (
+    POLICY_CONTEXT_MAX_CHARS,
     ModerationAnalysisRequest,
     ModerationAnalysisResponse,
     ModerationDecision,
@@ -44,7 +45,35 @@ class ModerationState(TypedDict, total=False):
     response: ModerationAnalysisResponse
 
 
-def _validate_grounding(state: ModerationState) -> None:
+ALLOWED_ACTIONS_BY_RISK = {
+    "LOW": {"DISMISS", "WARNING", "MANUAL_REVIEW"},
+    "MEDIUM": {"WARNING", "SUSPEND_1_DAY", "SUSPEND_3_DAYS", "MANUAL_REVIEW"},
+    "HIGH": {
+        "SUSPEND_3_DAYS",
+        "SUSPEND_7_DAYS",
+        "PERMANENT_SUSPENSION",
+        "FORCE_DELETE_MEETING",
+        "MANUAL_REVIEW",
+    },
+    "CRITICAL": {
+        "SUSPEND_7_DAYS",
+        "PERMANENT_SUSPENSION",
+        "FORCE_DELETE_MEETING",
+        "MANUAL_REVIEW",
+    },
+}
+
+
+def normalize_recommended_action(decision: ModerationDecision, target_type: str) -> ModerationDecision:
+    action = decision.recommendedAction
+    allowed = action in ALLOWED_ACTIONS_BY_RISK[decision.riskLevel]
+    target_matches = action != "FORCE_DELETE_MEETING" or target_type == "MEETING"
+    if allowed and target_matches:
+        return decision
+    return decision.model_copy(update={"recommendedAction": "MANUAL_REVIEW"})
+
+
+def _validate_grounding(state: ModerationState) -> ModerationDecision:
     request = state["request"]
     decision = state["decision"]
     evidence_by_id = {item.evidenceId: item for item in request.evidence}
@@ -68,15 +97,11 @@ def _validate_grounding(state: ModerationState) -> None:
             policy is None
             or policy.policyId != grounding.policyId
             or grounding.policyChunkId in policy_chunks
-            or grounding.policyQuote not in policy.content
+            or grounding.policyQuote not in policy.content[:POLICY_CONTEXT_MAX_CHARS]
         ):
             raise ModelOutputError("신고 분석의 정책 근거를 확인할 수 없습니다.")
         policy_chunks.add(grounding.policyChunkId)
-
-    if decision.recommendedAction == "FORCE_DELETE_MEETING" and request.targetType != "MEETING":
-        raise ModelOutputError("신고 대상과 추천 제재가 일치하지 않습니다.")
-    if decision.riskLevel == "CRITICAL" and decision.recommendedAction in {"DISMISS", "WARNING"}:
-        raise ModelOutputError("위험도와 추천 제재가 일치하지 않습니다.")
+    return normalize_recommended_action(decision, request.targetType)
 
 
 def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
@@ -103,8 +128,10 @@ def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
         }
 
     def validate_evidence_and_policy(state: ModerationState):
-        _validate_grounding(state)
-        return {"decision_validated": True}
+        return {
+            "decision": _validate_grounding(state),
+            "decision_validated": True,
+        }
 
     def build_result(state: ModerationState):
         decision = state["decision"]

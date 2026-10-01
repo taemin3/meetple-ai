@@ -5,6 +5,7 @@ from typing import Protocol
 from openai import AsyncOpenAI
 
 from meetple_ai.contracts import (
+    POLICY_CONTEXT_MAX_CHARS,
     Candidate,
     Intent,
     ModerationAnalysisRequest,
@@ -117,7 +118,7 @@ class OpenAISearchModel:
             "않는다. summary는 확인 가능한 내용만 500자 이하로 요약하고 이름, 이메일, 연락처 같은 직접 "
             "식별자는 일반 표현으로 바꾼다. keyword는 정책 검색용 핵심 행위 표현이다. semanticQuery는 "
             "사람·모임·메시지 ID나 직접 식별자 없이 문제 행위와 대상 유형을 설명하는 500자 이하의 검색 "
-            "문장이다. policyType은 가장 관련 있는 정책 유형이며 불명확하면 null이다.",
+            "문장이다. 정책 유형은 이 단계에서 확정하지 않는다.",
             {
                 "targetType": request.targetType,
                 "reportedReason": request.reason,
@@ -149,7 +150,7 @@ class OpenAISearchModel:
                 "policyType": item.policyType,
                 "targetType": item.targetType,
                 "clauseCode": item.clauseCode,
-                "content": item.content[:3000],
+                "content": item.content[:POLICY_CONTEXT_MAX_CHARS],
             }
             for item in policies
         ]

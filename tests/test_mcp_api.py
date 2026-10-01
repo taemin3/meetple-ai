@@ -31,7 +31,6 @@ class FakeModerationModel:
             summary="반복적인 모욕 메시지 신고입니다.",
             keyword="반복 모욕",
             semanticQuery="채팅에서 상대방을 반복적으로 모욕하는 행위",
-            policyType="ABUSE_OR_HARASSMENT",
         )
 
     async def embed(self, semantic_query):
@@ -158,6 +157,7 @@ async def test_moderation_api_searches_spring_policy_without_user_capability():
         assert "x-meetple-capability" not in request.headers
         body = json.loads(request.content)
         assert body["targetType"] == "CHAT_MESSAGE"
+        assert body["policyType"] is None
         assert body["queryEmbeddingModel"] == "text-embedding-3-small"
         assert len(body["queryEmbedding"]) == 1536
         seen.append(body)

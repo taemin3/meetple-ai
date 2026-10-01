@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+POLICY_CONTEXT_MAX_CHARS = 3000
+
 
 class Contract(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, allow_inf_nan=False)
@@ -159,7 +161,6 @@ class PolicySearchPlan(Contract):
     summary: str = Field(min_length=1, max_length=500)
     keyword: str = Field(min_length=1, max_length=200)
     semanticQuery: str = Field(min_length=1, max_length=500)
-    policyType: PolicyType | None
 
 
 class PolicyCandidate(Contract):
