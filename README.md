@@ -87,6 +87,12 @@ Copy-Item .env.example .env
 | `AI_OPENAI_EMBEDDING_MODEL` | `vector(1536)`과 맞는 고정 모델 `text-embedding-3-small` |
 | `AI_BACKEND_URL` | 기본 `http://127.0.0.1:8080` |
 | `AI_MCP_URL` | 기본 `http://127.0.0.1:8001/mcp/` |
+| `AI_KAFKA_CONSUMER_ENABLED` | 신고 분석 Kafka Consumer 활성화. 기본 `false` |
+| `AI_KAFKA_BOOTSTRAP_SERVERS` | Kafka bootstrap 주소. 여러 주소는 쉼표로 구분 |
+| `AI_KAFKA_CONSUMER_GROUP` | 기본 `meetple-ai-report-analysis-v1` |
+| `AI_KAFKA_TOPIC` | 기본 `meetple.moderation.report-analysis.v1` |
+| `AI_KAFKA_RETRY_DELAYS_SECONDS` | Retry 0~3 지연 JSON 배열. 기본 `[5,30,120,600]` |
+| `AI_KAFKA_MAX_POLL_INTERVAL_MS` | 분석과 최대 Retry 지연보다 긴 poll 제한. 기본 `900000` |
 
 생성 모델 ID에는 기본값이 없으며 환경변수로 지정한다. 임베딩 모델은 Spring의 저장 벡터와 같은 `text-embedding-3-small`만 허용한다. 계정의 모델 접근 권한과 실제 응답 품질은 직접 호출해 확인해야 한다.
 
@@ -190,7 +196,23 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 
 초기 LLM 판단은 정책 유형의 하드 필터로 사용하지 않으며 대상 유형에 맞는 정책 전체에서 근거를 찾는다. 응답에는 신고 유형, 위험도, 우선순위, 요약, 판단 근거, 검증된 증거·정책 ID, 확신도와 관리자용 추천 제재가 포함된다. 위험도와 맞지 않거나 신고 대상에 적용할 수 없는 제재는 `MANUAL_REVIEW`로 제한한다. LLM에는 조회나 제재 도구를 제공하지 않으며, 추천만 생성한다. 실제 결과 저장, 자동 경고 조건 평가, 정지·삭제 같은 제재 실행은 Spring의 후속 단계다.
 
-현재 엔드포인트는 HTTP 계약과 분석 그래프를 검증하기 위한 내부 처리 경계다. Kafka 이벤트 소비, 신고 문맥 조회, Spring 결과 콜백과 Retry/DLQ는 backend 연동 PR에서 구현한다.
+Kafka Consumer를 활성화하면 `meetple.moderation.report-analysis.v1`의 Outbox 이벤트에서 `reportId`만
+검증한 뒤 Spring에서 신고 시점 스냅샷을 조회한다. 분석 성공 결과는 Spring callback으로 저장하며,
+일시 실패는 `.retry-0`부터 `.retry-3`까지 순서대로 전달한다. 최종 실패와 잘못된 이벤트는 `.dlq`로
+보낸다. Retry 지연 중에는 해당 Retry 토픽 파티션만 일시 정지하므로 기본 신고 토픽 처리는 계속된다.
+Consumer는 기본적으로 비활성화되어 있으며 Kafka와 Spring 내부 API가 함께 준비된 환경에서만 켠다.
+수동 offset commit과 Spring의 결과 멱등성 검증으로 중복 저장을 막지만, 결과 callback·Retry publish와
+offset commit은 하나의 Kafka 트랜잭션이 아니므로 전달 의미는 at-least-once다.
+
+```text
+Outbox → Kafka 기본 토픽 → Spring 신고 스냅샷 조회 → LangGraph + 정책 RAG
+  → 성공: Spring 분석 결과 callback
+  → 일시 실패: Spring FAILED_RETRYABLE + Retry 토픽
+  → 최종 실패: Spring FAILED_PERMANENT + DLQ
+```
+
+`POST /v1/moderation/analyze`는 같은 분석 그래프를 직접 검증하는 내부 API로 유지한다. 자동 경고와
+관리자 승인 제재는 이 Consumer의 범위에 포함하지 않는다.
 
 `POST /v1/moderation/policies/embeddings/sync`는 누락되거나 정책 원문 변경으로 stale 상태가 된 조항을 Spring에서 최대 100개 조회한다. 조항 원문을 한 번의 Embeddings API 배치 요청으로 변환한 뒤 `contentHash`가 여전히 일치하는 조항만 Spring에 저장한다. 호출 자체를 예약하는 스케줄러와 운영 정책 데이터 입력은 아직 포함하지 않는다.
 - 앱 로그에는 질문·후보 본문·인증값 대신 임의 요청 ID, 시간, 결과 상태를 기록한다. 프록시/APM의 별도 본문 로깅도 확인해야 한다.
