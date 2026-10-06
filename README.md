@@ -112,7 +112,30 @@ Spring 실행 환경에도 다음 값을 넣는다. Python `.env`는 Spring이 �
 
 `GET http://127.0.0.1:8001/healthz`는 프로세스 상태, `/readyz`는 생성 모델과 임베딩 모델 설정 유무만 확인한다. 실제 OpenAI 연결·잔액·모델 권한을 검사하는 프로브가 아니다.
 
-이 저장소 루트에서 컨테이너 빌드: `docker build -t meetple-ai .`. 컨테이너 실행 시 `AI_BACKEND_URL`에는 Spring에 접근 가능한 사설 주소를 지정한다. Docker Compose/ECS 배포 설정은 이번 범위에 포함하지 않는다.
+이 저장소 루트에서 컨테이너 빌드: `docker build -t meetple-ai .`. 컨테이너 실행 시 `AI_BACKEND_URL`에는 Spring에 접근 가능한 사설 주소를 지정한다.
+
+## Staging 배포
+
+`.github/workflows/ci.yml`은 기존 테스트가 통과한 commit만 AWS staging에 배포한다. PR과 `main` push에서는 테스트를 한 번만 실행하며, GitHub OIDC로 단기 자격 증명을 발급받으므로 장기 AWS access key는 저장하지 않는다.
+
+1. Git commit SHA를 immutable tag로 사용해 `meetple-staging-ai` ECR에 이미지를 build/push한다.
+2. Terraform이 등록한 최신 `meetple-staging-ai` task definition에서 환경변수·secret·CPU·memory 설정을 가져온다.
+3. `ai` container image만 commit image로 교체한 새 revision을 등록한다.
+4. `meetple-staging-ai` ECS service를 갱신하고 안정화될 때까지 기다린다.
+
+GitHub repository의 `Settings -> Environments`에서 `staging` Environment를 만들고 deployment branch를 `main`으로 제한한다. Terraform output을 Environment variable로 등록한다.
+
+```text
+AWS_DEPLOY_ROLE_ARN=<terraform output -raw github_actions_ai_deploy_role_arn>
+```
+
+최초에는 `Actions -> Test and deploy AI service -> Run workflow`에서 `main`을 선택해 수동 실행한다. `ai_desired_count=0`이어도 ECR image와 image-specific task definition revision은 준비된다. 이후 자동 배포를 사용할 때만 repository variable을 추가한다.
+
+```text
+AUTO_DEPLOY_ENABLED=true
+```
+
+Terraform의 CPU·memory·environment·secret 같은 baseline을 변경했다면 Terraform apply 후 workflow를 다시 실행한다. ECS service의 활성 image revision은 이 workflow가 관리한다.
 
 ## 앱용 API 계약
 
