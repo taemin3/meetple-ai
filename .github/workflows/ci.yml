@@ -1,4 +1,4 @@
-name: Test AI service
+name: Test and deploy AI service
 
 on:
   pull_request:
@@ -10,8 +10,17 @@ on:
 permissions:
   contents: read
 
+env:
+  AWS_REGION: ap-northeast-2
+  ECR_REPOSITORY: meetple-staging-ai
+  ECS_CLUSTER: meetple-staging-cluster
+  ECS_SERVICE: meetple-staging-ai
+  ECS_TASK_DEFINITION_FAMILY: meetple-staging-ai
+  ECS_CONTAINER_NAME: ai
+
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -26,3 +35,82 @@ jobs:
             pytest -q
             python evals/run.py
           '
+
+  deploy:
+    name: Deploy staging
+    needs: test
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'push' && vars.AUTO_DEPLOY_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: staging
+    concurrency:
+      group: staging-ai-deployment
+      cancel-in-progress: false
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Validate deployment configuration
+        env:
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: test -n "$AWS_DEPLOY_ROLE_ARN"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Log in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@03f1aad4c6c7ffd436567f42f9384779290529bd # v2
+
+      - name: Resolve immutable image
+        id: image
+        env:
+          ECR_REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          image_uri="$ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
+
+          if aws ecr describe-images \
+            --repository-name "$ECR_REPOSITORY" \
+            --image-ids "imageTag=$IMAGE_TAG" >/dev/null 2>&1; then
+            echo "Reusing existing immutable image $image_uri"
+          else
+            docker build --tag "$image_uri" .
+            docker push "$image_uri"
+          fi
+
+          echo "image_uri=$image_uri" >> "$GITHUB_OUTPUT"
+
+      - name: Download latest task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition "$ECS_TASK_DEFINITION_FAMILY" \
+            --query taskDefinition > task-definition.json
+
+      - name: Render task definition with commit image
+        id: render-task-definition
+        uses: aws-actions/amazon-ecs-render-task-definition@138c24f321fdbdf7edee4a685519d253cae2cdea # v1
+        with:
+          task-definition: task-definition.json
+          container-name: ${{ env.ECS_CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.image_uri }}
+
+      - name: Deploy task definition
+        uses: aws-actions/amazon-ecs-deploy-task-definition@c465972ecbd160473f22e683363b422a5412a3de # v2
+        with:
+          task-definition: ${{ steps.render-task-definition.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true
+          wait-max-delay-seconds: 15
