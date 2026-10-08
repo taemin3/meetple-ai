@@ -84,6 +84,7 @@ class BackendClient:
         request: ModerationAnalysisRequest,
         plan: PolicySearchPlan,
         query_embedding: list[float],
+        limit: int,
     ) -> PolicyCandidates:
         body = {
             "keyword": plan.keyword,
@@ -92,7 +93,7 @@ class BackendClient:
             "policyType": None,
             "queryEmbedding": query_embedding,
             "queryEmbeddingModel": self.embedding_model,
-            "limit": 10,
+            "limit": limit,
         }
         try:
             data = await self._request("POST", "/internal/ai/moderation/policies/search", body=body)

@@ -28,17 +28,32 @@ class InvalidModerationEvent(Exception):
 
 
 class ModerationAnalysisProcessor:
-    def __init__(self, backend, model, slots: asyncio.Semaphore):
+    def __init__(
+        self,
+        backend,
+        model,
+        slots: asyncio.Semaphore,
+        *,
+        min_policy_hybrid_score: float = 0.30,
+        policy_result_limit: int = 5,
+    ):
         self.backend = backend
         self.model = model
         self.slots = slots
+        self.min_policy_hybrid_score = min_policy_hybrid_score
+        self.policy_result_limit = policy_result_limit
 
     async def process(self, report_id: int) -> None:
         request = await self.backend.moderation_context(report_id)
         async with self.slots:
-            result = await build_moderation_graph(self.model, self.backend).ainvoke(
+            result = await build_moderation_graph(
+                self.model,
+                self.backend,
+                min_policy_hybrid_score=self.min_policy_hybrid_score,
+                policy_result_limit=self.policy_result_limit,
+            ).ainvoke(
                 {"request": request},
-                {"recursion_limit": 12},
+                {"recursion_limit": 20},
             )
         await self.backend.complete_moderation(result["response"])
 

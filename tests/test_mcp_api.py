@@ -159,6 +159,7 @@ async def test_moderation_api_searches_spring_policy_without_user_capability():
         assert body["targetType"] == "CHAT_MESSAGE"
         assert body["policyType"] is None
         assert body["queryEmbeddingModel"] == "text-embedding-3-small"
+        assert body["limit"] == 5
         assert len(body["queryEmbedding"]) == 1536
         seen.append(body)
         return httpx.Response(
@@ -233,6 +234,20 @@ async def test_moderation_api_searches_spring_policy_without_user_capability():
 def test_embedding_model_is_fixed_to_text_embedding_3_small():
     with pytest.raises(ValidationError):
         Settings(openai_embedding_model="other-model", _env_file=None)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"moderation_policy_min_hybrid_score": -0.01},
+        {"moderation_policy_min_hybrid_score": 1.01},
+        {"moderation_policy_result_limit": 0},
+        {"moderation_policy_result_limit": 11},
+    ],
+)
+def test_moderation_policy_retrieval_settings_are_bounded(overrides):
+    with pytest.raises(ValidationError):
+        Settings(**overrides, _env_file=None)
 
 
 async def test_policy_embedding_sync_reads_jobs_and_upserts_fixed_model_vectors():

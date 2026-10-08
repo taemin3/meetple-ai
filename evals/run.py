@@ -116,9 +116,9 @@ class ModerationFixtureTools:
     def __init__(self, policies):
         self.policies = policies
 
-    async def search_policies(self, request, plan, query_embedding):
+    async def search_policies(self, request, plan, query_embedding, limit):
         items = [policy for policy in self.policies if policy.targetType in ("ALL", request.targetType)]
-        return PolicyCandidates(items=items[:10], hasMore=len(items) > 10)
+        return PolicyCandidates(items=items[:limit], hasMore=len(items) > limit)
 
 
 def cosine_distance(left, right):
@@ -232,9 +232,12 @@ async def evaluate_moderation(cases, policies):
             row = {"id": case["id"]}
             try:
                 async with asyncio.timeout(45):
-                    result = await build_moderation_graph(model, tools).ainvoke(
-                        {"request": make_moderation_request(case)}, {"recursion_limit": 12}
-                    )
+                    result = await build_moderation_graph(
+                        model,
+                        tools,
+                        min_policy_hybrid_score=settings.moderation_policy_min_hybrid_score,
+                        policy_result_limit=settings.moderation_policy_result_limit,
+                    ).ainvoke({"request": make_moderation_request(case)}, {"recursion_limit": 20})
                 row["checks"] = grade_moderation(case, result["response"])
                 row["passed"] = all(row["checks"].values())
                 row["actual"] = result["response"].model_dump(mode="json")

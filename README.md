@@ -85,6 +85,8 @@ Copy-Item .env.example .env
 | `AI_OPENAI_API_KEY` | OpenAI API 키 |
 | `AI_OPENAI_MODEL` | 계정에서 사용 가능한 Responses + Structured Outputs 지원 모델 ID |
 | `AI_OPENAI_EMBEDDING_MODEL` | `vector(1536)`과 맞는 고정 모델 `text-embedding-3-small` |
+| `AI_MODERATION_POLICY_MIN_HYBRID_SCORE` | 정책 후보 최소 하이브리드 점수. 기본 `0.30` |
+| `AI_MODERATION_POLICY_RESULT_LIMIT` | LLM에 전달할 정책 후보 상한. 기본 `5`, 최대 `10` |
 | `AI_BACKEND_URL` | 기본 `http://127.0.0.1:8080` |
 | `AI_MCP_URL` | 기본 `http://127.0.0.1:8001/mcp/` |
 | `AI_KAFKA_CONSUMER_ENABLED` | 신고 분석 Kafka Consumer 활성화. 기본 `false` |
@@ -213,11 +215,14 @@ Terraform의 CPU·memory·environment·secret 같은 baseline을 변경했다면
 
 ```text
 입력 검증 → 신고 요약·정책 검색 문장 생성 → text-embedding-3-small 임베딩
-→ Spring 운영 정책 검색 API → 구조화된 신고 분류 → 증거·정책 ID와 원문 인용 검증
-→ 검증된 ID만 분석 결과로 반환
+→ Spring 운영 정책 검색 API → 최소 관련도 필터와 상위 후보 제한
+→ 관련 후보가 없으면 검색 문장 1회 재작성 → 구조화된 신고 분류
+→ 증거·정책 ID와 원문 인용 검증 → 실패 시 분석 1회 보정 → 검증된 ID만 결과로 반환
 ```
 
 초기 LLM 판단은 정책 유형의 하드 필터로 사용하지 않으며 대상 유형에 맞는 정책 전체에서 근거를 찾는다. 응답에는 신고 유형, 위험도, 우선순위, 요약, 판단 근거, 검증된 증거·정책 ID, 확신도와 관리자용 추천 제재가 포함된다. 위험도와 맞지 않거나 신고 대상에 적용할 수 없는 제재는 `MANUAL_REVIEW`로 제한한다. LLM에는 조회나 제재 도구를 제공하지 않으며, 추천만 생성한다. 실제 결과 저장, 자동 경고 조건 평가, 정지·삭제 같은 제재 실행은 Spring의 후속 단계다.
+
+정책 후보는 기본적으로 `hybridScore >= 0.30`인 조항 중 상위 5개만 사용한다. 관련 후보가 없을 때 최초 요약은 유지한 채 검색 문장만 최대 한 번 재작성하고, 모델이 반환한 증거·정책 ID 또는 인용문 검증이 실패하면 같은 후보 안에서 결정을 최대 한 번 보정한다. 반복 횟수를 제한해 무한 루프를 막는다. 두 복구 경로가 모두 실행되면 기존 분석보다 Structured Output 호출이 최대 2회, 임베딩 호출이 최대 1회 늘 수 있어 비용과 지연도 증가한다. 기본 임계값은 초기 운영값이며 실제 정확도에 맞춘 최적값으로 측정된 것은 아니다.
 
 Kafka Consumer를 활성화하면 `meetple.moderation.report-analysis.v1`의 Outbox 이벤트에서 `reportId`만
 검증한 뒤 Spring에서 신고 시점 스냅샷을 조회한다. 분석 성공 결과는 Spring callback으로 저장하며,

@@ -71,13 +71,20 @@ def decision_fixture(**updates):
 
 
 class FakeModerationModel:
-    def __init__(self, decision=None):
+    def __init__(self, decision=None, repaired_decision=None):
         self.plan = PolicySearchPlan(
             summary="채팅에서 상대방을 반복적으로 모욕했다는 신고입니다.",
             keyword="반복 모욕",
             semanticQuery="채팅에서 상대방을 반복적으로 모욕하고 괴롭히는 행위",
         )
+        self.refined_plan = self.plan.model_copy(
+            update={
+                "keyword": "언어 괴롭힘",
+                "semanticQuery": "채팅에서 타인을 언어로 괴롭히는 행위",
+            }
+        )
         self.decision = decision or decision_fixture()
+        self.repaired_decision = repaired_decision or self.decision
         self.calls = []
 
     async def prepare_moderation(self, request):
@@ -88,19 +95,28 @@ class FakeModerationModel:
         self.calls.append(("embed", semantic_query))
         return [0.01] * 1536
 
+    async def refine_moderation_search(self, request, previous_plan):
+        self.calls.append(("refine", previous_plan.keyword))
+        return self.refined_plan
+
     async def analyze_moderation(self, request, plan, policies):
         self.calls.append(("analyze", [policy.policyChunkId for policy in policies]))
         return self.decision
 
+    async def repair_moderation_decision(self, request, plan, policies, previous_decision, validation_error):
+        self.calls.append(("repair", validation_error))
+        return self.repaired_decision
+
 
 class FakePolicyTools:
-    def __init__(self, policies=()):
-        self.policies = list(policies)
+    def __init__(self, policies=(), *, responses=None):
+        self.responses = [list(policies)] if responses is None else [list(items) for items in responses]
         self.calls = []
 
-    async def search_policies(self, request, plan, query_embedding):
-        self.calls.append((request.reportId, plan.keyword, len(query_embedding)))
-        return PolicyCandidates(items=self.policies, hasMore=False)
+    async def search_policies(self, request, plan, query_embedding, limit):
+        self.calls.append((request.reportId, plan.keyword, len(query_embedding), limit))
+        index = min(len(self.calls) - 1, len(self.responses) - 1)
+        return PolicyCandidates(items=self.responses[index], hasMore=False)
 
 
 async def test_moderation_graph_returns_only_verified_ids():
@@ -127,7 +143,7 @@ async def test_moderation_graph_returns_only_verified_ids():
         ("embed", "채팅에서 상대방을 반복적으로 모욕하고 괴롭히는 행위"),
         ("analyze", [101]),
     ]
-    assert tools.calls == [(77, "반복 모욕", 1536)]
+    assert tools.calls == [(77, "반복 모욕", 1536, 5)]
 
 
 @pytest.mark.parametrize(
@@ -158,9 +174,72 @@ async def test_moderation_graph_rejects_unverified_evidence_and_policy(decision)
 
 async def test_moderation_graph_fails_closed_without_policy_candidates():
     model = FakeModerationModel()
+    tools = FakePolicyTools()
     with pytest.raises(ModelOutputError, match="운영 정책"):
-        await build_moderation_graph(model, FakePolicyTools()).ainvoke({"request": request_fixture()})
+        await build_moderation_graph(model, tools).ainvoke({"request": request_fixture()})
+    assert [call for call in model.calls if isinstance(call, tuple) and call[0] == "refine"] == [
+        ("refine", "반복 모욕")
+    ]
+    assert len(tools.calls) == 2
     assert all(call != ("analyze", []) for call in model.calls)
+
+
+async def test_moderation_graph_rewrites_search_once_when_no_candidate_meets_threshold():
+    low_score = policy_fixture().model_copy(update={"keywordMatched": True, "hybridScore": 0.29})
+    model = FakeModerationModel()
+    tools = FakePolicyTools(responses=[[low_score], [policy_fixture()]])
+
+    result = await build_moderation_graph(model, tools).ainvoke({"request": request_fixture()})
+
+    assert result["response"].policyIds == [11]
+    assert model.calls[:5] == [
+        "prepare",
+        ("embed", "채팅에서 상대방을 반복적으로 모욕하고 괴롭히는 행위"),
+        ("refine", "반복 모욕"),
+        ("embed", "채팅에서 타인을 언어로 괴롭히는 행위"),
+        ("analyze", [101]),
+    ]
+    assert [call[1] for call in tools.calls] == ["반복 모욕", "언어 괴롭힘"]
+
+
+async def test_moderation_graph_filters_minimum_relevance_and_limits_model_context():
+    low_score = policy_fixture().model_copy(
+        update={"policyId": 20, "policyChunkId": 200, "keywordMatched": True, "hybridScore": 0.29}
+    )
+    relevant = [
+        policy_fixture(),
+        *[
+            policy_fixture().model_copy(
+                update={
+                    "policyId": policy_id,
+                    "policyChunkId": policy_id * 10,
+                    "keywordMatched": False,
+                    "hybridScore": 0.30,
+                }
+            )
+            for policy_id in range(21, 27)
+        ],
+    ]
+    model = FakeModerationModel()
+
+    await build_moderation_graph(model, FakePolicyTools([low_score, *relevant])).ainvoke(
+        {"request": request_fixture()}
+    )
+
+    analyze_call = next(call for call in model.calls if isinstance(call, tuple) and call[0] == "analyze")
+    assert analyze_call[1] == [101, 210, 220, 230, 240]
+
+
+async def test_moderation_graph_repairs_invalid_grounding_once():
+    invalid = decision_fixture(evidence=[EvidenceGrounding(evidenceId=501, evidenceQuote="없는 증거")])
+    model = FakeModerationModel(invalid, repaired_decision=decision_fixture())
+
+    result = await build_moderation_graph(model, FakePolicyTools([policy_fixture()])).ainvoke(
+        {"request": request_fixture()}
+    )
+
+    assert result["response"].evidenceIds == [501]
+    assert [call[0] for call in model.calls if isinstance(call, tuple)].count("repair") == 1
 
 
 async def test_force_delete_is_limited_to_manual_review_for_non_meeting_target():

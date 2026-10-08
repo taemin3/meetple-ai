@@ -16,12 +16,25 @@ from meetple_ai.model import ModelOutputError
 
 class ModerationModel(Protocol):
     async def prepare_moderation(self, request: ModerationAnalysisRequest) -> PolicySearchPlan: ...
+    async def refine_moderation_search(
+        self,
+        request: ModerationAnalysisRequest,
+        previous_plan: PolicySearchPlan,
+    ) -> PolicySearchPlan: ...
     async def embed(self, semantic_query: str) -> list[float]: ...
     async def analyze_moderation(
         self,
         request: ModerationAnalysisRequest,
         plan: PolicySearchPlan,
         policies: list[PolicyCandidate],
+    ) -> ModerationDecision: ...
+    async def repair_moderation_decision(
+        self,
+        request: ModerationAnalysisRequest,
+        plan: PolicySearchPlan,
+        policies: list[PolicyCandidate],
+        previous_decision: ModerationDecision,
+        validation_error: str,
     ) -> ModerationDecision: ...
 
 
@@ -31,6 +44,7 @@ class PolicyTools(Protocol):
         request: ModerationAnalysisRequest,
         plan: PolicySearchPlan,
         query_embedding: list[float],
+        limit: int,
     ) -> PolicyCandidates: ...
 
 
@@ -40,8 +54,11 @@ class ModerationState(TypedDict, total=False):
     plan: PolicySearchPlan
     query_embedding: list[float]
     policies: PolicyCandidates
+    policy_search_rewrites: int
     decision: ModerationDecision
+    decision_repairs: int
     decision_validated: bool
+    grounding_error: str
     response: ModerationAnalysisResponse
 
 
@@ -71,6 +88,19 @@ def normalize_recommended_action(decision: ModerationDecision, target_type: str)
     if allowed and target_matches:
         return decision
     return decision.model_copy(update={"recommendedAction": "MANUAL_REVIEW"})
+
+
+def filter_relevant_policies(
+    policies: PolicyCandidates,
+    *,
+    min_hybrid_score: float,
+    result_limit: int,
+) -> PolicyCandidates:
+    relevant = [policy for policy in policies.items if policy.hybridScore >= min_hybrid_score]
+    return PolicyCandidates(
+        items=relevant[:result_limit],
+        hasMore=policies.hasMore or len(relevant) > result_limit,
+    )
 
 
 def _validate_grounding(state: ModerationState) -> ModerationDecision:
@@ -104,7 +134,13 @@ def _validate_grounding(state: ModerationState) -> ModerationDecision:
     return normalize_recommended_action(decision, request.targetType)
 
 
-def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
+def build_moderation_graph(
+    model: ModerationModel,
+    tools: PolicyTools,
+    *,
+    min_policy_hybrid_score: float = 0.30,
+    policy_result_limit: int = 5,
+):
     def validate_input(state: ModerationState):
         return {"input_validated": True}
 
@@ -115,10 +151,30 @@ def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
         return {"query_embedding": await model.embed(state["plan"].semanticQuery)}
 
     async def retrieve_policies(state: ModerationState):
-        policies = await tools.search_policies(state["request"], state["plan"], state["query_embedding"])
-        if not policies.items:
-            raise ModelOutputError("신고 분석에 적용할 운영 정책을 찾지 못했습니다.")
-        return {"policies": policies}
+        policies = await tools.search_policies(
+            state["request"],
+            state["plan"],
+            state["query_embedding"],
+            policy_result_limit,
+        )
+        return {
+            "policies": filter_relevant_policies(
+                policies,
+                min_hybrid_score=min_policy_hybrid_score,
+                result_limit=policy_result_limit,
+            )
+        }
+
+    async def rewrite_policy_query(state: ModerationState):
+        refined_plan = await model.refine_moderation_search(state["request"], state["plan"])
+        return {
+            # 재검색은 검색어만 넓히며 최초 신고 요약은 모델이 다시 쓰지 못하게 고정한다.
+            "plan": refined_plan.model_copy(update={"summary": state["plan"].summary}),
+            "policy_search_rewrites": state.get("policy_search_rewrites", 0) + 1,
+        }
+
+    def fail_policy_search(state: ModerationState):
+        raise ModelOutputError("신고 분석에 적용할 운영 정책을 찾지 못했습니다.")
 
     async def classify_report(state: ModerationState):
         return {
@@ -128,10 +184,32 @@ def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
         }
 
     def validate_evidence_and_policy(state: ModerationState):
+        try:
+            return {
+                "decision": _validate_grounding(state),
+                "decision_validated": True,
+                "grounding_error": "",
+            }
+        except ModelOutputError as exc:
+            return {
+                "decision_validated": False,
+                "grounding_error": str(exc),
+            }
+
+    async def repair_decision(state: ModerationState):
         return {
-            "decision": _validate_grounding(state),
-            "decision_validated": True,
+            "decision": await model.repair_moderation_decision(
+                state["request"],
+                state["plan"],
+                state["policies"].items,
+                state["decision"],
+                state["grounding_error"],
+            ),
+            "decision_repairs": state.get("decision_repairs", 0) + 1,
         }
+
+    def fail_grounding(state: ModerationState):
+        raise ModelOutputError(state["grounding_error"])
 
     def build_result(state: ModerationState):
         decision = state["decision"]
@@ -156,14 +234,52 @@ def build_moderation_graph(model: ModerationModel, tools: PolicyTools):
         ("summarize_report", summarize_report),
         ("embed_policy_query", embed_policy_query),
         ("retrieve_policies", retrieve_policies),
+        ("rewrite_policy_query", rewrite_policy_query),
+        ("fail_policy_search", fail_policy_search),
         ("classify_report", classify_report),
         ("validate_evidence_and_policy", validate_evidence_and_policy),
+        ("repair_decision", repair_decision),
+        ("fail_grounding", fail_grounding),
         ("build_result", build_result),
     ]
     for name, node in nodes:
         graph.add_node(name, node)
     graph.add_edge(START, "validate_input")
-    for (current, _), (following, _) in zip(nodes, nodes[1:]):
-        graph.add_edge(current, following)
+    graph.add_edge("validate_input", "summarize_report")
+    graph.add_edge("summarize_report", "embed_policy_query")
+    graph.add_edge("embed_policy_query", "retrieve_policies")
+    graph.add_conditional_edges(
+        "retrieve_policies",
+        lambda state: (
+            "classify_report"
+            if state["policies"].items
+            else "rewrite_policy_query"
+            if state.get("policy_search_rewrites", 0) < 1
+            else "fail_policy_search"
+        ),
+        {
+            "classify_report": "classify_report",
+            "rewrite_policy_query": "rewrite_policy_query",
+            "fail_policy_search": "fail_policy_search",
+        },
+    )
+    graph.add_edge("rewrite_policy_query", "embed_policy_query")
+    graph.add_edge("classify_report", "validate_evidence_and_policy")
+    graph.add_conditional_edges(
+        "validate_evidence_and_policy",
+        lambda state: (
+            "build_result"
+            if state["decision_validated"]
+            else "repair_decision"
+            if state.get("decision_repairs", 0) < 1
+            else "fail_grounding"
+        ),
+        {
+            "build_result": "build_result",
+            "repair_decision": "repair_decision",
+            "fail_grounding": "fail_grounding",
+        },
+    )
+    graph.add_edge("repair_decision", "validate_evidence_and_policy")
     graph.add_edge("build_result", END)
     return graph.compile()
