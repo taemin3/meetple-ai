@@ -1,6 +1,6 @@
 from typing import Literal
 
-from pydantic import SecretStr, model_validator
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -10,6 +10,8 @@ class Settings(BaseSettings):
     openai_api_key: SecretStr = SecretStr("")
     openai_model: str = ""
     openai_embedding_model: Literal["text-embedding-3-small"] = "text-embedding-3-small"
+    moderation_policy_min_hybrid_score: float = Field(default=0.30, ge=0, le=1)
+    moderation_policy_result_limit: int = Field(default=5, ge=1, le=10)
     backend_url: str = "http://127.0.0.1:8080"
     mcp_url: str = "http://127.0.0.1:8001/mcp/"
     kafka_consumer_enabled: bool = False

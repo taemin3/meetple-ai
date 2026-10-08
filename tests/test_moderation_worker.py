@@ -346,7 +346,7 @@ async def test_backend_preserves_invalid_policy_response_as_contract_failure():
     ) as client:
         backend = BackendClient(client, "service-token", "text-embedding-3-small")
         with pytest.raises(BackendContractInvalid, match="운영 정책 응답이 올바르지 않습니다"):
-            await backend.search_policies(request, plan, [0.0] * 1536)
+            await backend.search_policies(request, plan, [0.0] * 1536, 5)
 
 
 @pytest.mark.asyncio

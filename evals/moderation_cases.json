@@ -98,5 +98,52 @@
       "requiredPolicyIds": [206],
       "allowedPolicyIds": [203, 206]
     }
+  },
+  {
+    "id": "moderation_search_rewrite_recovery",
+    "recovery": {
+      "type": "SEARCH_REWRITE",
+      "requiredTerms": ["사기", "허위", "금전", "입금", "계좌", "참가비"]
+    },
+    "request": {
+      "reportId": 6,
+      "targetType": "MEETING",
+      "reason": "FRAUD_OR_FALSE_INFORMATION",
+      "description": "안내와 다른 참가비를 외부 계좌로 입금하라고 요구합니다.",
+      "evidence": [
+        {"evidenceId": 506, "evidenceType": "MEETING", "content": "공지에는 무료라고 적혀 있지만 참여하려면 개인 계좌로 참가비를 입금하라고 안내했습니다."}
+      ]
+    },
+    "expected": {
+      "reportTypes": ["FRAUD_OR_FALSE_INFORMATION"],
+      "riskLevels": ["MEDIUM", "HIGH"],
+      "actions": ["WARNING", "SUSPEND_1_DAY", "SUSPEND_3_DAYS", "SUSPEND_7_DAYS", "FORCE_DELETE_MEETING", "MANUAL_REVIEW"],
+      "evidenceIds": [506],
+      "requiredPolicyIds": [204],
+      "allowedPolicyIds": [203, 204, 205, 206]
+    }
+  },
+  {
+    "id": "moderation_grounding_repair_recovery",
+    "recovery": {
+      "type": "GROUNDING_REPAIR"
+    },
+    "request": {
+      "reportId": 7,
+      "targetType": "CHAT_MESSAGE",
+      "reason": "ABUSE_OR_HARASSMENT",
+      "description": null,
+      "evidence": [
+        {"evidenceId": 507, "evidenceType": "CHAT_MESSAGE", "content": "상대방을 바보라고 부르며 같은 모욕을 여러 차례 반복했습니다."}
+      ]
+    },
+    "expected": {
+      "reportTypes": ["ABUSE_OR_HARASSMENT"],
+      "riskLevels": ["MEDIUM", "HIGH"],
+      "actions": ["WARNING", "SUSPEND_1_DAY", "SUSPEND_3_DAYS", "SUSPEND_7_DAYS", "MANUAL_REVIEW"],
+      "evidenceIds": [507],
+      "requiredPolicyIds": [202],
+      "allowedPolicyIds": [202, 203, 206]
+    }
   }
 ]

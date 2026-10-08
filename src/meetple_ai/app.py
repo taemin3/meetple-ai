@@ -56,7 +56,13 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
     if settings.kafka_consumer_enabled and model is not None:
         moderation_worker = ReportAnalysisKafkaWorker(
             settings,
-            ModerationAnalysisProcessor(backend, model, slots),
+            ModerationAnalysisProcessor(
+                backend,
+                model,
+                slots,
+                min_policy_hybrid_score=settings.moderation_policy_min_hybrid_score,
+                policy_result_limit=settings.moderation_policy_result_limit,
+            ),
             backend,
         )
 
@@ -150,9 +156,12 @@ def create_app(settings: Settings | None = None, *, backend=None, model=None, to
         try:
             async with asyncio.timeout(45):
                 async with slots:
-                    result = await build_moderation_graph(model, backend).ainvoke(
-                        {"request": body}, {"recursion_limit": 12}
-                    )
+                    result = await build_moderation_graph(
+                        model,
+                        backend,
+                        min_policy_hybrid_score=settings.moderation_policy_min_hybrid_score,
+                        policy_result_limit=settings.moderation_policy_result_limit,
+                    ).ainvoke({"request": body}, {"recursion_limit": 20})
             logger.info(
                 "moderation_complete request_id=%s duration_ms=%d status=COMPLETED",
                 request_id,
