@@ -242,6 +242,36 @@ async def test_moderation_graph_repairs_invalid_grounding_once():
     assert [call[0] for call in model.calls if isinstance(call, tuple)].count("repair") == 1
 
 
+async def test_grounding_repair_cannot_raise_risk_priority_confidence_or_sanction():
+    invalid = decision_fixture(
+        evidence=[EvidenceGrounding(evidenceId=501, evidenceQuote="없는 증거")],
+        confidence=0.70,
+    )
+    escalated_repair = decision_fixture(
+        reportType="SAFETY",
+        riskLevel="CRITICAL",
+        priority="URGENT",
+        rationale="보정 모델이 판단 수위를 높였습니다.",
+        confidence=0.99,
+        recommendedAction="PERMANENT_SUSPENSION",
+    )
+    model = FakeModerationModel(invalid, repaired_decision=escalated_repair)
+
+    result = await build_moderation_graph(model, FakePolicyTools([policy_fixture()])).ainvoke(
+        {"request": request_fixture()}
+    )
+
+    response = result["response"]
+    assert response.reportType == "ABUSE_OR_HARASSMENT"
+    assert response.riskLevel == "MEDIUM"
+    assert response.priority == "HIGH"
+    assert response.rationale == invalid.rationale
+    assert response.confidence == 0.70
+    assert response.recommendedAction == "WARNING"
+    assert response.evidenceIds == [501]
+    assert response.policyIds == [11]
+
+
 async def test_force_delete_is_limited_to_manual_review_for_non_meeting_target():
     decision = decision_fixture(riskLevel="HIGH", recommendedAction="FORCE_DELETE_MEETING")
     result = await build_moderation_graph(

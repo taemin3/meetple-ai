@@ -55,6 +55,11 @@ def load_moderation_data():
         assert set(expected["requiredPolicyIds"]) <= set(expected["allowedPolicyIds"])
         assert set(expected["allowedPolicyIds"]) <= policy_ids
         assert expected["reportTypes"] and expected["riskLevels"] and expected["actions"]
+        recovery = case.get("recovery")
+        if recovery:
+            assert recovery["type"] in {"SEARCH_REWRITE", "GROUNDING_REPAIR"}
+            if recovery["type"] == "SEARCH_REWRITE":
+                assert recovery["requiredTerms"]
     return cases, policies
 
 
@@ -111,14 +116,85 @@ class FixtureTools:
 
 
 class ModerationFixtureTools:
-    """Target filtering fixture for prompt evaluation, not Spring hybrid-search proof."""
+    """Target filtering and deliberate recovery injection for prompt evaluation."""
 
-    def __init__(self, policies):
+    def __init__(self, policies, recovery=None):
         self.policies = policies
+        self.recovery = recovery or {}
+        self.search_calls = 0
+        self.first_query = None
 
     async def search_policies(self, request, plan, query_embedding, limit):
+        self.search_calls += 1
         items = [policy for policy in self.policies if policy.targetType in ("ALL", request.targetType)]
+        if self.recovery.get("type") == "SEARCH_REWRITE":
+            current_query = (plan.keyword, plan.semanticQuery)
+            if self.search_calls == 1:
+                self.first_query = current_query
+                items = [policy.model_copy(update={"hybridScore": -1.0}) for policy in items]
+            else:
+                combined_query = f"{plan.keyword} {plan.semanticQuery}".lower()
+                has_required_term = any(
+                    term.lower() in combined_query for term in self.recovery["requiredTerms"]
+                )
+                if current_query == self.first_query or not has_required_term:
+                    items = [policy.model_copy(update={"hybridScore": -1.0}) for policy in items]
         return PolicyCandidates(items=items[:limit], hasMore=len(items) > limit)
+
+
+class ModerationEvaluationModel:
+    """Delegates to the live model while forcing the requested recovery branch once."""
+
+    def __init__(self, model, recovery=None):
+        self.model = model
+        self.recovery = recovery or {}
+        self.refine_calls = 0
+        self.repair_calls = 0
+        self.grounding_corrupted = False
+
+    async def prepare_moderation(self, request):
+        return await self.model.prepare_moderation(request)
+
+    async def refine_moderation_search(self, request, previous_plan):
+        self.refine_calls += 1
+        return await self.model.refine_moderation_search(request, previous_plan)
+
+    async def embed(self, semantic_query):
+        return await self.model.embed(semantic_query)
+
+    async def analyze_moderation(self, request, plan, policies):
+        decision = await self.model.analyze_moderation(request, plan, policies)
+        if self.recovery.get("type") != "GROUNDING_REPAIR" or self.grounding_corrupted:
+            return decision
+        self.grounding_corrupted = True
+        invalid_evidence = decision.evidence[0].model_copy(update={"evidenceId": 2_147_483_647})
+        return decision.model_copy(update={"evidence": [invalid_evidence, *decision.evidence[1:]]})
+
+    async def repair_moderation_decision(
+        self,
+        request,
+        plan,
+        policies,
+        previous_decision,
+        validation_error,
+    ):
+        self.repair_calls += 1
+        return await self.model.repair_moderation_decision(
+            request,
+            plan,
+            policies,
+            previous_decision,
+            validation_error,
+        )
+
+
+def grade_recovery(case, model, tools):
+    recovery_type = case.get("recovery", {}).get("type")
+    if recovery_type == "SEARCH_REWRITE":
+        return model.refine_calls == 1 and tools.search_calls == 2
+    if recovery_type == "GROUNDING_REPAIR":
+        return model.grounding_corrupted and model.repair_calls == 1
+    return model.refine_calls == 0 and model.repair_calls == 0
 
 
 def cosine_distance(left, right):
@@ -225,13 +301,14 @@ async def evaluate_moderation(cases, policies):
     async with AsyncOpenAI(
         api_key=settings.openai_api_key.get_secret_value(), timeout=12, max_retries=0
     ) as client:
-        model = OpenAISearchModel(client, settings.openai_model, settings.openai_embedding_model)
-        tools = ModerationFixtureTools(policies)
+        live_model = OpenAISearchModel(client, settings.openai_model, settings.openai_embedding_model)
         for case in cases:
             started = monotonic()
             row = {"id": case["id"]}
+            model = ModerationEvaluationModel(live_model, case.get("recovery"))
+            tools = ModerationFixtureTools(policies, case.get("recovery"))
             try:
-                async with asyncio.timeout(45):
+                async with asyncio.timeout(75):
                     result = await build_moderation_graph(
                         model,
                         tools,
@@ -239,6 +316,7 @@ async def evaluate_moderation(cases, policies):
                         policy_result_limit=settings.moderation_policy_result_limit,
                     ).ainvoke({"request": make_moderation_request(case)}, {"recursion_limit": 20})
                 row["checks"] = grade_moderation(case, result["response"])
+                row["checks"]["recoveryBranch"] = grade_recovery(case, model, tools)
                 row["passed"] = all(row["checks"].values())
                 row["actual"] = result["response"].model_dump(mode="json")
             except Exception as exc:
@@ -250,7 +328,10 @@ async def evaluate_moderation(cases, policies):
     report = {
         "model": settings.openai_model,
         "embeddingModel": settings.openai_embedding_model,
-        "scope": "synthetic reports and policies; in-memory target filter; no Spring/DB",
+        "scope": (
+            "synthetic reports and policies; in-memory target filter with deliberate recovery "
+            "injections; no Spring/DB"
+        ),
         "count": len(rows),
         "passed": sum(row["passed"] for row in rows),
         "meanMs": round(mean(durations)),

@@ -90,6 +90,27 @@ def normalize_recommended_action(decision: ModerationDecision, target_type: str)
     return decision.model_copy(update={"recommendedAction": "MANUAL_REVIEW"})
 
 
+def merge_repaired_grounding(
+    original: ModerationDecision,
+    repaired: ModerationDecision,
+) -> ModerationDecision:
+    # 보정 모델은 근거만 고칠 수 있다. 분류·위험도·우선순위·사유를 바꿔 제재 수위를
+    # 올리지 못하게 하고, 확신도 감소와 보수적인 수동 검토/기각 전환만 허용한다.
+    recommended_action = (
+        repaired.recommendedAction
+        if repaired.recommendedAction in {"MANUAL_REVIEW", "DISMISS"}
+        else original.recommendedAction
+    )
+    return original.model_copy(
+        update={
+            "evidence": repaired.evidence,
+            "policies": repaired.policies,
+            "confidence": min(original.confidence, repaired.confidence),
+            "recommendedAction": recommended_action,
+        }
+    )
+
+
 def filter_relevant_policies(
     policies: PolicyCandidates,
     *,
@@ -197,14 +218,15 @@ def build_moderation_graph(
             }
 
     async def repair_decision(state: ModerationState):
+        repaired = await model.repair_moderation_decision(
+            state["request"],
+            state["plan"],
+            state["policies"].items,
+            state["decision"],
+            state["grounding_error"],
+        )
         return {
-            "decision": await model.repair_moderation_decision(
-                state["request"],
-                state["plan"],
-                state["policies"].items,
-                state["decision"],
-                state["grounding_error"],
-            ),
+            "decision": merge_repaired_grounding(state["decision"], repaired),
             "decision_repairs": state.get("decision_repairs", 0) + 1,
         }
 
