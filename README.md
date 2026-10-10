@@ -117,13 +117,6 @@ health endpoint를 제외한 요청은 `X-AI-Service-Token`을 요구합니다. 
 
 `.github/workflows/ci.yml`은 PR과 `main` push에서 테스트를 실행합니다. staging 배포는 GitHub OIDC로 단기 AWS 자격 증명을 발급받고, commit SHA 이미지로 ECR과 ECS task revision을 갱신합니다. 자동 배포는 repository variable `AUTO_DEPLOY_ENABLED=true`일 때만 활성화됩니다.
 
-## 운영 경계
-
-- 기본 정책 점수 임계값과 후보 수는 초기 운영값이며 실제 정확도에 맞춘 최적값으로 측정된 것은 아닙니다.
-- 자동 테스트 통과는 실제 모델 품질이나 신고 분류 정확도를 보장하지 않습니다.
-- callback, Retry publish, offset commit은 하나의 Kafka 트랜잭션이 아니므로 중복 전달 가능성을 전제로 합니다.
-- 위험한 제재는 AI가 실행하지 않으며 관리자 검토를 최종 경계로 유지합니다.
-
 ## 관련 저장소
 
 - [Meetple Backend](https://github.com/taemin3/meetple-backend)
